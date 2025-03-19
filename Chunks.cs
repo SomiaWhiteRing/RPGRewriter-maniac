@@ -18,6 +18,15 @@ namespace RPGRewriter
             this.className = className;
         }
         
+        // 无参数构造函数，用于创建空的Chunks对象
+        public Chunks()
+        {
+            this.f = null;
+            this.className = "";
+            this.chunkList = new List<byte>();
+            this.chunkCheckList = new List<byte>();
+        }
+        
         // Returns whether chunk was used.
         public bool used(byte b)
         {

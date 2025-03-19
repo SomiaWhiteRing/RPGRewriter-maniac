@@ -612,6 +612,22 @@ namespace RPGRewriter
         {
             if (refName == null)
                 initStatic();
+                
+            // 确保str数组已经被初始化
+            if (str == null)
+            {
+                str = new string[256];
+                for (int i = 0; i < str.Length; i++)
+                {
+                    str[i] = "";
+                }
+            }
+            
+            // 确保chunks对象已经被初始化
+            if (chunks == null)
+            {
+                chunks = new Chunks();
+            }
             
             int tabNum = 0x15;
             

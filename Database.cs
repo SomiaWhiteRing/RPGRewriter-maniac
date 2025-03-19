@@ -413,99 +413,105 @@ namespace RPGRewriter
         // Loads string scripts for each tab and replaces strings.
         public void importStrings(string scriptDir)
         {
-            if (chunks.used(0x0b))
+            // 确保所有必要的对象都已初始化
+            if (chunks == null)
+            {
+                chunks = new Chunks();
+            }
+            
+            if (chunks.used(0x0b) && heroes != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Hero.txt", 0x0b);
                 if (!M.stringScriptImportCheck)
                     heroes.importStrings();
             }
-            if (chunks.used(0x0c))
+            if (chunks.used(0x0c) && skills != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Skills.txt", 0x0c);
                 if (!M.stringScriptImportCheck)
                     skills.importStrings();
             }
-            if (chunks.used(0x0d))
+            if (chunks.used(0x0d) && items != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Items.txt", 0x0d);
                 if (!M.stringScriptImportCheck)
                     items.importStrings();
             }
-            if (chunks.used(0x0e))
+            if (chunks.used(0x0e) && monsters != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Monsters.txt", 0x0e);
                 if (!M.stringScriptImportCheck)
                     monsters.importStrings();
             }
-            if (chunks.used(0x0f))
+            if (chunks.used(0x0f) && troops != null)
             {
                 M.loadStringScript(scriptDir + "\\Troops.txt", -1, true);
                 if (!M.stringScriptImportCheck)
                     troops.importStrings();
             }
-            if (chunks.used(0x10))
+            if (chunks.used(0x10) && terrains != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Terrain.txt", 0x10);
                 if (!M.stringScriptImportCheck)
                     terrains.importStrings();
             }
-            if (chunks.used(0x11))
+            if (chunks.used(0x11) && attributes != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Attributes.txt", 0x11);
                 if (!M.stringScriptImportCheck)
                     attributes.importStrings();
             }
-            if (chunks.used(0x12))
+            if (chunks.used(0x12) && conditions != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Conditions.txt", 0x12);
                 if (!M.stringScriptImportCheck)
                     conditions.importStrings();
             }
-            if (chunks.used(0x13))
+            if (chunks.used(0x13) && animations != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Animations.txt", 0x13);
                 if (!M.stringScriptImportCheck)
                     animations.importStrings();
             }
-            if (chunks.used(0x14))
+            if (chunks.used(0x14) && chipSets != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\ChipSet.txt", 0x14);
                 if (!M.stringScriptImportCheck)
                     chipSets.importStrings();
             }
-            if (chunks.used(0x15))
+            if (chunks.used(0x15) && vocab != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Vocab.txt", 0x15);
                 if (!M.stringScriptImportCheck)
                     vocab.importStrings();
             }
-            if (chunks.used(0x17))
+            if (chunks.used(0x17) && switches != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Switches.txt", 0x17, true);
                 if (!M.stringScriptImportCheck)
                     switches.importStrings();
             }
-            if (chunks.used(0x18))
+            if (chunks.used(0x18) && variables != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Variables.txt", 0x18, true);
                 if (!M.stringScriptImportCheck)
                     variables.importStrings();
             }
-            if (chunks.used(0x19))
+            if (chunks.used(0x19) && commonEvents != null)
                 commonEvents.importStrings(scriptDir + "\\Commons");
-            if (chunks.used(0x1d))
+            if (chunks.used(0x1d) && battleSettings != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\BattleSettings.txt", 0x1d);
                 if (!M.stringScriptImportCheck)
                     battleSettings.importStrings();
             }
-            if (chunks.used(0x1e))
+            if (chunks.used(0x1e) && classes != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\Classes.txt", 0x1e);
                 if (!M.stringScriptImportCheck)
                     classes.importStrings();
             }
-            if (chunks.used(0x20))
+            if (chunks.used(0x20) && battlerAnimations != null)
             {
                 M.loadStringScriptDatabase(scriptDir + "\\BattlerAnimations.txt", 0x20);
                 if (!M.stringScriptImportCheck)

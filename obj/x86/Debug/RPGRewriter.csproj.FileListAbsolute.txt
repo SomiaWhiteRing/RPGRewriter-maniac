@@ -1,8 +1,0 @@
-C:\Users\旻\Documents\GitHub\RPGRewriter-maniac\bin\Debug\RPGRewriter.exe
-C:\Users\旻\Documents\GitHub\RPGRewriter-maniac\bin\Debug\RPGRewriter.pdb
-C:\Users\旻\Documents\GitHub\RPGRewriter-maniac\bin\Debug\Newtonsoft.Json.dll
-C:\Users\旻\Documents\GitHub\RPGRewriter-maniac\obj\x86\Debug\RPGRewriter.csproj.AssemblyReference.cache
-C:\Users\旻\Documents\GitHub\RPGRewriter-maniac\obj\x86\Debug\RPGRewriter.csproj.CoreCompileInputs.cache
-C:\Users\旻\Documents\GitHub\RPGRewriter-maniac\obj\x86\Debug\RPGRewri.D15BF5BA.Up2Date
-C:\Users\旻\Documents\GitHub\RPGRewriter-maniac\obj\x86\Debug\RPGRewriter.exe
-C:\Users\旻\Documents\GitHub\RPGRewriter-maniac\obj\x86\Debug\RPGRewriter.pdb
