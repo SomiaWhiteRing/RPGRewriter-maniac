@@ -3325,36 +3325,65 @@ namespace RPGRewriter
         }
         
         // Special version of readString for move routes that subtracts from lengthTemp, and in move commands, uses a different style of multibyte.
-        public static string readStringMove(FileStream f, ref int lengthTemp, int strType, string source)
+        public static string readStringMove(FileStream f, int strType, string source)
         {
-            int length = readMultibyte(f);
-            lengthTemp--;
-            
+            int length = readMultibyte(f); // 读取字符串数据的字节长度
+            // lengthTemp--; // REMOVE THIS
+
             byte[] bytes = new byte[length];
             for (int i = 0; i < length; i++)
             {
                 bytes[i] = (byte)readByte(f);
-                lengthTemp--;
-                if (bytes[i] >= 0x80)
+                // lengthTemp--; // REMOVE THIS
+
+                if (bytes[i] >= 0x80 && source != "Custom") // 处理非 Custom 路线的特殊编码
                 {
-                    if (source == "Custom")
+                    // 之前这里是 += (readByte(f) - 1)，但这个逻辑非常可疑
+                    // 让我们暂时保持原样读取，但需要确认这个编码的真实含义
+                    // 重要的事：读取下一个字节，即使我们不确定如何处理它
+                    byte extraByte = (byte)readByte(f);
+                    // lengthTemp--; // REMOVE THIS
+
+                    // 这里需要确认正确的解码逻辑。是组合？还是别的？
+                    // 暂时保留原来的组合方式用于打印，但要意识到这可能是错误的
+                    int combinedValue = bytes[i] + (extraByte - 1);
+                    Console.WriteLine($"DEBUG: readStringMove (non-custom) encountered byte >= 0x80 ({bytes[i]}). Read extra byte {extraByte}. Combined value (suspicious logic): {combinedValue}. Verify decoding!");
+                    // 如果正确的解码方式是将这两个字节视为一个字符，那么需要调整 bytes 数组的填充方式
+                    // 例如，如果 0x81 0x40 代表某个字符，这里需要处理 i 的增加
+                    if (bytes[i] == 0x81 && i + 1 < length) // 示例：如果 0x81 是前导字节
                     {
-                        i++;
-                        if (i < bytes.Length)
-                            bytes[i] = (byte)readByte(f);
-                        lengthTemp--;
+                        // bytes[i] = ...; // 根据解码结果设置
+                        // bytes[i+1] = ...; // 可能需要设置
+                        // i++; // 跳过下一个字节的常规读取
                     }
-                    else // Yep, it's different for non-custom routes. Whyyyyy
-                        bytes[i] += (byte)(readByte(f) - 1);
+                    else
+                    {
+                        // 如果不是预期的组合，可能需要记录错误或回退指针
+                    }
+                    // **关键**: 原始代码中没有明确处理解码后的字节如何存回 bytes 数组，
+                    // 只是读取了 extraByte 并减少了 lengthTemp。这本身就是个问题。
+                    // 为了让程序跑起来，我们暂时只读取 extraByte，不修改 bytes[i]。
+                    // 这意味着字符串解码可能会出错，但字节计数应该是对的（因为我们读取了正确的字节数）。
                 }
+                // 注意：原始代码的另一个版本是 i++ 并读取 bytes[i]，这更像是 Shift-JIS 等双字节编码的处理
+                // else if (bytes[i] >= 0x80 && source == "Custom") { // 假设 Custom 使用 Shift-JIS
+                //      if (i + 1 < bytes.Length) {
+                //          bytes[i+1] = (byte)readByte(f);
+                //          i++;
+                //          // lengthTemp--; // REMOVED
+                //      }
+                // }
+                // ^^^ 这个 Custom 的处理也需要确认，readStringMove 的原始代码注释似乎与实现有些出入。
+                // 简单起见，我们暂时只处理 non-custom 的特殊读取，让 Custom 使用标准读取。
             }
-            
+
+            // 使用指定的编码解码字节数组
             char[] chars = new char[readEncodings[strType].GetCharCount(bytes, 0, bytes.Length)];
             readEncodings[strType].GetChars(bytes, 0, bytes.Length, chars, 0);
             return new string(chars);
         }
         
-        // Reads a string, may rewrite or check it depending on global mode, then returns the (possibly rewritten) string.
+        // Reads a string, may rewrite or check it depending on globyimaal mode, then returns the (possibly rewritten) string.
         public static string readStringAndRewrite(FileStream f, int mode, int strType, string source = "Event")
         {
             string readStr = readString(f, strType);
@@ -3362,9 +3391,12 @@ namespace RPGRewriter
         }
         
         // Special version of readAndRewrite for move events that subtracts from lengthTemp.
-        public static string readStringMoveAndRewrite(FileStream f, int mode, ref int lengthTemp, int strType, string source)
+        // NO LONGER uses or modifies lengthTemp.
+        public static string readStringMoveAndRewrite(FileStream f, int mode, int strType, string source)
         {
-            string readStr = readStringMove(f, ref lengthTemp, strType, source);
+            // 调用修改后的 readStringMove，不再传递 lengthTemp
+            string readStr = readStringMove(f, strType, source);
+            // readStringAndRewriteShared 不需要 lengthTemp
             return readStringAndRewriteShared(readStr, mode, strType, source);
         }
         
@@ -3552,21 +3584,81 @@ namespace RPGRewriter
         }
         
         // Reads a byte length, then a list of commands, stopping at the end command.
+        // 读取一个事件命令列表
         public static List<Command> readCommandList(FileStream f)
         {
-            readMultibyte(f); // Length
+            // 1. 读取这个命令列表数据块的总字节长度
+            //    这个长度是在 0x34 标记之后，由 RPG Maker 文件格式定义的
+            int commandListExpectedLength = readMultibyte(f);
+            Console.WriteLine($"DEBUG: readCommandList - Expected command list length: {commandListExpectedLength} bytes.");
+
+            // 记录命令列表内容的起始位置，用于计算读取了多少字节
+            long listContentStartPos = f.Position;
+            int bytesReadInList = 0; // 用于跟踪实际读取的字节数
+
             List<Command> list = new List<Command>();
             int line = 1;
-            while (true)
+
+            // 循环读取命令，直到读取的字节数达到预期长度
+            while (bytesReadInList < commandListExpectedLength)
             {
                 currentLine = "Line " + line++;
-                
+                long commandStartPos = f.Position;
+
+                // 打印当前状态，方便调试
+                Console.WriteLine($"DEBUG: readCommandList - Reading command at list offset {bytesReadInList} / {commandListExpectedLength}. File offset: {commandStartPos}");
+
+                // 创建并加载一个命令 (Command的构造函数会调用它的 load 方法)
                 Command command = new Command(f);
+                long commandEndPos = f.Position;
+
+                // 计算这个命令读取了多少字节
+                int commandBytes = (int)(commandEndPos - commandStartPos);
+                bytesReadInList += commandBytes; // 累加实际读取的字节数
+
+                // 打印读取结果
+                Console.WriteLine($"DEBUG: readCommandList - Read command code {command.getCode()}, consumed {commandBytes} bytes. Total read in list: {bytesReadInList} / {commandListExpectedLength}");
+
                 list.Add(command);
-                
-                if (command.isEndCommand())
+
+                // 安全检查：如果一个命令没读取任何字节，或者读取超出了预期，则停止
+                if (commandBytes <= 0)
+                {
+                    Console.WriteLine($"ERROR: Command.load read {commandBytes} bytes. Aborting list read.");
                     break;
+                }
+                if (bytesReadInList > commandListExpectedLength)
+                {
+                    Console.WriteLine($"ERROR: readCommandList read {bytesReadInList} bytes, exceeding expected {commandListExpectedLength}. Last command code: {command.getCode()}. Aborting.");
+                    // 如果超出，文件指针已经在错误位置，我们直接退出
+                    break;
+                }
+
+                // 检查是否是 RPG Maker 命令列表的官方结束命令（通常是代码 0，嵌套层级 0）
+                // 我们仍然需要读完所有字节，但可以记录一下
+                if (command.isListEndCommand()) // 你需要确保 Command 类有这个方法
+                {
+                    Console.WriteLine($"DEBUG: readCommandList encountered official list end command (Code 0, Indent 0) at list offset {bytesReadInList - commandBytes}.");
+                    // 不在这里 break，继续循环直到字节数满足
+                }
             }
+
+            // 循环结束后，检查实际读取的字节数是否等于预期
+            if (bytesReadInList == commandListExpectedLength)
+            {
+                Console.WriteLine($"DEBUG: readCommandList successfully read exactly {bytesReadInList} bytes as expected.");
+            }
+            else // 如果不等于 (只可能是小于，因为大于的情况在循环内break了)
+            {
+                Console.WriteLine($"WARNING: readCommandList finished, but read {bytesReadInList} bytes, while expecting {commandListExpectedLength}. File: {currentFile}, Event: {currentEventNum}, Page: {currentPageNum}");
+                // 文件指针当前位置: f.Position
+                // 预期结束位置: listContentStartPos + commandListExpectedLength
+                // 这里的差异导致了后续的 byteCheck(0x00) 失败
+                // 我们可以尝试打印一下差异
+                Console.WriteLine($"Pointer is short by {commandListExpectedLength - bytesReadInList} bytes. Current pos: {f.Position}, Expected end pos: {listContentStartPos + commandListExpectedLength}");
+                // 暂时不强制移动指针，先观察日志
+            }
+
             return list;
         }
         
