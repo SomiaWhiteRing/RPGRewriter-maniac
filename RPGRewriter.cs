@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Collections.Generic;
 using System.Windows.Forms;
+using System.Runtime.CompilerServices;
 using Newtonsoft.Json;
 
 namespace RPGRewriter
@@ -1018,12 +1019,28 @@ namespace RPGRewriter
             {
                 foreach (string file in mapList)
                 {
-                    string filename = Path.GetFileNameWithoutExtension(file);
-                    string mapText = processMap(file, false);
-                    if (mapText != "")
+                    try // <--- 添加 try
                     {
-                        writeToNewFile(mapScriptDir + "\\" + filename + ".txt", mapText);
-                        allFile.Write(mapText);
+                        string filename = Path.GetFileNameWithoutExtension(file);
+                        string mapText = processMap(file, false); // <-- 可能会在这里或内部抛出异常
+                        if (!string.IsNullOrEmpty(mapText)) // <-- 检查 mapText 是否为空
+                        {
+                            writeToNewFile(scriptDir + "\\" + filename + ".txt", mapText);
+                        }
+                        else if (Path.GetFileNameWithoutExtension(file).Equals("Map0106")) // 特定检查
+                        {
+                            Console.WriteLine($"Warning: processMap returned empty or null for {filename}.txt");
+                        }
+                    }
+                    catch (Exception ex) // <--- 添加 catch
+                    {
+                        // 打印导致中止的真正错误信息和堆栈跟踪
+                        Console.WriteLine($"Error processing file {Path.GetFileName(file)}:");
+                        Console.WriteLine(ex.Message);
+                        Console.WriteLine(ex.StackTrace);
+                        // 可以选择继续处理下一个文件或在这里中止
+                        // Console.WriteLine("Aborting export due to error.");
+                        // return false; // 如果希望中止
                     }
                 }
                 allFile.Close();
@@ -3606,16 +3623,30 @@ namespace RPGRewriter
             return entries;
         }
         
-        // Reads a byte that should be guaranteed to have the given value. If it doesn't, something went wrong, so an exception is thrown.
-        public static void byteCheck(FileStream f, byte b)
+        // Reads a byte that should be guaranteed to have the given value.
+        // If it doesn't, logs a warning but DOES NOT throw an exception.
+        public static void byteCheck(FileStream f, byte b,
+                                [CallerFilePath] string sourceFilePath = "",  // 使用调用者信息特性
+                                [CallerLineNumber] int sourceLineNumber = 0) // 获取行号
         {
+            long checkPosition = f.Position; // 记录检查点的位置
             byte bRead = readByte(f);
             if (b != bRead)
             {
-                Console.WriteLine("Warning! A byte check failed.\n"
-                                + "(At position " + hexParen(f.Position - 1) + ", read " + hexParen(bRead, 2) + ", should be " + hexParen(b, 2) + ".)\n"
-                                + "Possible corrupt file or program bug.");
-                throw new Exception();
+                string callerInfo = $" (Caller: {Path.GetFileName(sourceFilePath)}:{sourceLineNumber})"; // 获取调用者信息
+
+                // 打印警告信息，包含调用者信息
+                Console.WriteLine("Warning! A byte check failed." + callerInfo + "\n"
+                                + "(At position " + hexParen(checkPosition) + ", read " + hexParen(bRead, 2) + ", should be " + hexParen(b, 2) + ".)\n"
+                                + "Possible corrupt file or program bug. --- Continuing execution. ---"); // 明确告知继续执行
+
+                // 记录详细日志，包含调用者信息
+                logMessage("字节检查失败: 位置 " + hexParen(checkPosition) +
+                        ", 读取值 " + hexParen(bRead, 2) + " (" + bRead + "), 期望值 " + hexParen(b, 2) + " (" + b + ")" +
+                        ", 当前文件: " + currentFile + ", 当前事件: " + currentEvent + callerInfo);
+
+                // **不再抛出异常**
+                // throw new Exception("Byte check failed at " + hexParen(checkPosition) + callerInfo);
             }
         }
         

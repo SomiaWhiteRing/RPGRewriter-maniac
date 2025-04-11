@@ -40,7 +40,7 @@ namespace RPGRewriter
         long[] generatorTileID; // 3e, verbose only (2003)
         int[][] layer1Tiles; // 47, getTilesString or verbose only
         int[][] layer2Tiles; // 48, getTilesString or verbose only
-        List<Event> events; // 51
+        List<Event> events = new List<Event>(); // 51 - 初始化为空列表
         int saveCount2003E = 0; // 5a, verbose only
         int saveCount = 0; // 5b, verbose only
         
