@@ -88,7 +88,7 @@ namespace RPGRewriter
                 customRoute = new PageCustomRoute(f);
             
             if (chunks.next(0x33))
-                // M.readLengthMultibyte(f); // Command section length
+                M.readLengthMultibyte(f); // Command section length
             
             M.completeMessage = null;
             M.messageFaceOn = false;
@@ -388,18 +388,9 @@ namespace RPGRewriter
             
             if (chunks.next(0x0c))
             {
-                int moveLength = M.readMultibyte(f); // 读取期望的字节长度
-                Console.WriteLine($"DEBUG: Map {M.currentFile}, Event {M.currentEventNum}, Page {M.currentPageNum}, Expecting Move Route length: {moveLength}");
+                int moveLength = M.readMultibyte(f);
                 if (moveLength > 0)
-                {
-                    long routeStartPos = f.Position;
-                    moveRoute = new MoveRoute(f, moveLength, "Custom"); // 传递期望长度
-                    long routeEndPos = f.Position;
-                    int actualBytesReadByRoute = (int)(routeEndPos - routeStartPos);
-                    Console.WriteLine($"DEBUG: MoveRoute constructor finished. Actual bytes consumed by MoveRoute: {actualBytesReadByRoute}");
-                    // 可选：如果 MoveRoute 内部没有处理长度不匹配，可以在这里尝试处理
-                    // if (actualBytesReadByRoute != moveLength) { ... }
-                }
+                    moveRoute = new MoveRoute(f, moveLength, "Custom");
             }
             
             if (chunks.next(0x15))
@@ -407,7 +398,7 @@ namespace RPGRewriter
             if (chunks.next(0x16))
                 moveIgnore = M.readLengthBool(f);
             
-            // M.byteCheck(f, 0x00);
+            M.byteCheck(f, 0x00);
         }
         
         // Returns move route string.

@@ -962,18 +962,6 @@ namespace RPGRewriter
             
             return result != ""? (indentStr + marker + result) : result;
         }
-
-        public int getCode()
-        {
-            return this.opcode; // 返回 opcode 成员变量的值
-        }
-        
-        // 添加这个方法来判断是否是列表结束命令
-        public bool isListEndCommand()
-        {
-            // 检查命令代码是否为 0 并且缩进级别是否为 0
-            return this.opcode == 0 && this.indent == 0;
-        }
         
         string command10Blank() // 0a
         {

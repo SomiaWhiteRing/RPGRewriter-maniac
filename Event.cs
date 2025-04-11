@@ -44,7 +44,7 @@ namespace RPGRewriter
             if (chunks.next(0x05))
                 pages = M.readList<Page>(f, "Page"); // Argument makes it set currentPage/currentPageNum before loading each page
             
-            // M.byteCheck(f, 0x00);
+            M.byteCheck(f, 0x00);
         }
         
         // Returns event string.
