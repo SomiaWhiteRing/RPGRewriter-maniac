@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
@@ -3518,6 +3518,94 @@ namespace RPGRewriter
                 list.Add(obj);
             }
             return list;
+        }
+
+        // New helper method to find the start of the next event
+        public static bool TrySkipToNextEventStart(FileStream f, int failedEventIndex, int totalEvents, long endOfEventChunkPos)
+        {
+            int nextEventNum = failedEventIndex + 2; // Event numbers are 1-based, index is 0-based
+            if (nextEventNum > totalEvents)
+            {
+                // There is no next event, we were processing the last one. Just go to the end.
+                f.Position = endOfEventChunkPos;
+                return true;
+            }
+
+            byte[] expectedBytes = getMultibytesForValue(nextEventNum);
+            long currentPos = f.Position;
+            logMessage($"Attempting recovery: Seeking start of Event {nextEventNum} (bytes: {BitConverter.ToString(expectedBytes).Replace("-", " ")}) from offset {hexParen(currentPos)}...");
+
+            while (currentPos < endOfEventChunkPos)
+            {
+                f.Position = currentPos; // Set position for reading
+                
+                // Try to read the potential multibyte for the next event number
+                long potentialStartPos = currentPos;
+                int bytesReadCount;
+                
+                try 
+                {
+                    // Need a way to read multibyte *without* advancing if it's short
+                    // Or, more simply, check the first byte
+                    byte firstByte = (byte)f.ReadByte();
+                    f.Position = potentialStartPos; // Reset position
+                    bytesReadCount = countMultibyte(firstByte < 128 ? firstByte : -1); // Estimate initial bytes needed
+
+                    // This is still tricky. A robust multibyte *peek* is needed, or byte-by-byte match.
+                    // Let's try a simpler byte-by-byte match for now.
+                    
+                    bool match = true;
+                    for(int i=0; i<expectedBytes.Length; ++i)
+                    {
+                        if (currentPos + i >= endOfEventChunkPos) {
+                            match = false;
+                            break;
+                        }
+                        f.Position = currentPos + i;
+                        if ((byte)f.ReadByte() != expectedBytes[i]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    f.Position = currentPos; // Reset after peeking/checking
+
+                    if (match) 
+                    {
+                        // Found a potential match for the event number bytes
+                        // Optional: Add heuristic check (e.g., is the byte AFTER the number a valid chunk ID like 0x01 or 0x02?)
+                        f.Position = currentPos + expectedBytes.Length; 
+                        if (f.Position < endOfEventChunkPos) {
+                            byte nextChunkId = (byte)f.ReadByte();
+                            // Check if it's a plausible start chunk ID for an event
+                            if (nextChunkId == 0x01 || nextChunkId == 0x02 || nextChunkId == 0x03 || nextChunkId == 0x05 || nextChunkId == 0x00) 
+                            {
+                                    // Seems plausible. Reset position to the start of the found event number.
+                                    f.Position = potentialStartPos; 
+                                    logMessage($"Recovery successful: Found Event {nextEventNum} start at {hexParen(f.Position)}.");
+                                    return true;
+                            }
+                        }
+                        // If check failed or at end of chunk, reset position and continue scanning
+                        f.Position = currentPos; 
+                    }
+                }
+                catch (EndOfStreamException)
+                {
+                    // Reached EOF unexpectedly while trying to read/check
+                    break;
+                }
+                catch (Exception ex) 
+                {
+                    // Other reading errors during recovery attempt
+                    logMessage($"Error during recovery scan at {hexParen(currentPos)}: {ex.Message}");
+                    // Depending on the error, might want to break or just advance
+                }
+
+                currentPos++; // Advance scan position by one byte
+            }
+
+            logMessage($"Recovery failed: Could not find start of Event {nextEventNum} before end of chunk ({hexParen(endOfEventChunkPos)}).");
+            return false;
         }
         
         // Reads a count, then a list of one-byte objects.

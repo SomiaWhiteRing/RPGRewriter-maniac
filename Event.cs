@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Text;
 using System.IO;
 
@@ -22,29 +23,56 @@ namespace RPGRewriter
         public Event()
         {
         }
-        
+
+        public bool IsSuccessfullyLoaded { get; private set; } = false; // 默认为 false
+
         // Loads a single event within a map.
         override public void load(FileStream f)
         {
-            chunks = new Chunks(f, myClass);
-            
-            eventNum = M.readMultibyte(f);
-            
-            if (chunks.next(0x01))
-                eventName = M.readString(f, M.S_UNTRANSLATED);
-            
-            if (chunks.next(0x02))
-                eventX = M.readLengthMultibyte(f);
-            if (chunks.next(0x03))
-                eventY = M.readLengthMultibyte(f);
-            
-            M.currentEvent = "Event " + eventNum + " (" + eventX + "," + eventY + ")";
-            M.currentEventNum = eventNum;
-            
-            if (chunks.next(0x05))
-                pages = M.readList<Page>(f, "Page"); // Argument makes it set currentPage/currentPageNum before loading each page
-            
-            M.byteCheck(f, 0x00);
+            long startPos = f.Position;
+            // *** 在 load 方法开始时，重置加载成功状态 ***
+            this.IsSuccessfullyLoaded = false; 
+
+            try
+            {
+                chunks = new Chunks(f, myClass);
+                eventNum = M.readMultibyte(f);
+                M.currentEventNum = eventNum;
+                M.currentEvent = "Event " + eventNum;
+
+                if (chunks.next(0x01))
+                    eventName = M.readString(f, M.S_UNTRANSLATED);
+                if (chunks.next(0x02))
+                    eventX = M.readLengthMultibyte(f);
+                if (chunks.next(0x03))
+                    eventY = M.readLengthMultibyte(f);
+                M.currentEvent = "Event " + eventNum + " (" + eventX + "," + eventY + ")";
+
+                if (chunks.next(0x05))
+                {
+                    // 确保 pages 在调用 readList 之前已初始化
+                    pages = new List<Page>(); // 初始化
+                    pages = M.readList<Page>(f, "Page"); 
+                }
+                else
+                {
+                    pages = new List<Page>(); // 如果没有页面块，初始化为空列表
+                }
+
+                // *** 移除或注释掉这里的 M.byteCheck(f, 0x00); ***
+
+                chunks.validateParity();
+
+                // *** 如果所有步骤都成功完成（没有抛出异常），则标记为成功加载 ***
+                this.IsSuccessfullyLoaded = true;
+
+            }
+            catch (Exception ex) // 捕获加载过程中的任何异常
+            {
+                // 如果发生异常，IsSuccessfullyLoaded 将保持 false
+                // 重新抛出异常，让 Map.cs 的 catch 块处理恢复逻辑
+                throw; 
+            }
         }
         
         // Returns event string.

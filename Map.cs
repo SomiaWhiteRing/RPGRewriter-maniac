@@ -158,15 +158,157 @@ namespace RPGRewriter
                 if (chunks.next(0x48))
                     layer2Tiles = M.readTwoByteArray2D(f, mapHeight, mapWidth);
                 
-                if (chunks.next(0x51))
-                    events = M.readList<Event>(f);
+                if (chunks.next(0x51)) // Events chunk ID
+                {
+                    // 读取事件块元数据
+                    int eventChunkLength = M.readMultibyte(f);
+                    int eventCount = M.readMultibyte(f);
+                    long startOfEventData = f.Position;
+                    long calculatedEndOfChunk = startOfEventData + eventChunkLength;
+
+                    // 确保 events 列表在使用前已初始化
+                    if (events == null) {
+                        events = new List<Event>();
+                    } else {
+                        events.Clear(); // 清空可能存在的旧数据
+                    }
+
+                    M.logMessage($"Map {id}: Found {eventCount} events. Chunk length: {eventChunkLength} bytes. Data range: {M.hexParen(startOfEventData)} - {M.hexParen(calculatedEndOfChunk)}");
+
+                    for (int i = 0; i < eventCount; i++)
+                    {
+                        long eventStartPos = f.Position;
+                        M.logMessage($"-- Map {id}: Attempting to load Event Index {i} at offset {M.hexParen(eventStartPos)} --");
+
+                        // 安全检查：确保我们没有意外地超出数据块边界
+                        if (eventStartPos >= calculatedEndOfChunk)
+                        {
+                            M.logMessage($"Warning: Map {id} Event index {i}: Reached or passed end of event chunk ({M.hexParen(calculatedEndOfChunk)}) prematurely at {M.hexParen(eventStartPos)}. Stopping event read.");
+                            break; // 停止读取此地图的事件
+                        }
+
+                        // 设置当前上下文，用于日志记录和可能的错误报告
+                        M.currentEvent = $"Map {id} Event Index {i}";
+                        M.currentPage = ""; M.currentLine = "";
+                        M.currentEventNum = 0; M.currentPageNum = 0; // 重置，Event.load内部会设置
+
+                        Event currentEvent = null;
+                        bool internalLoadThrewException = false; // Did Event.load itself throw an exception?
+                        bool tailByteCheckPassed = false;      // Did the 0x00 byte check pass?
+                        bool recoveryNeeded = false;         // Should we attempt recovery?
+                        bool eventAdded = false;             // Was this event successfully added?
+                        bool recoveryAttemptedAndFailed = false; // Track if recovery was tried and failed
+
+                        try
+                        {
+                            currentEvent = new Event();
+                            // *** 确保 Event.load 末尾的 byteCheck(f, 0x00) 已移除 ***
+                            currentEvent.load(f); // 尝试加载事件数据，内部 byteCheck 失败会抛异常
+
+                            // *** 手动检查事件结尾字节 ***
+                            long positionAfterLoad = f.Position;
+                            M.logMessage($"   Map {id} Event {M.currentEventNum} (Index {i}): Internal load finished at {M.hexParen(positionAfterLoad)}.");
+
+                            if (positionAfterLoad < calculatedEndOfChunk)
+                            {
+                                byte tailByte = M.readByte(f); // 读取预期的 0x00
+                                if (tailByte == 0x00)
+                                {
+                                    tailByteCheckPassed = true; // 结尾字节正确
+                                    M.logMessage($"   Map {id} Event {M.currentEventNum}: Tail byte check passed (0x00 found).");
+                                }
+                                else
+                                {
+                                    // 结尾字节错误
+                                    tailByteCheckPassed = false;
+                                    recoveryNeeded = true; // 需要恢复，因为指针不正确
+                                    M.logMessage($"Warning: Map {id} Event {M.currentEventNum} (Index {i}): Tail byte check failed at offset {M.hexParen(positionAfterLoad)}. Expected 0x00, read {M.hexParen(tailByte)}. Recovery needed.");
+                                }
+                            }
+                            else
+                            {
+                                // 恰好在块尾或超出，结尾检查也算失败
+                                tailByteCheckPassed = false;
+                                recoveryNeeded = true; // 也需要恢复/调整指针
+                                M.logMessage($"Warning: Map {id} Event {M.currentEventNum} (Index {i}): Reached/exceeded chunk end ({M.hexParen(calculatedEndOfChunk)}) at offset {M.hexParen(positionAfterLoad)} when expecting event end byte 0x00. Recovery needed.");
+                            }
+                        }
+                        catch (Exception ex) // 捕获 Event.load 内部的异常
+                        {
+                            internalLoadThrewException = true;
+                            recoveryNeeded = true; // 需要恢复
+                            tailByteCheckPassed = false; // 不能假设结尾字节正确
+
+                            int eventNumWithError = M.currentEventNum != 0 ? M.currentEventNum : (i + 1);
+                            M.logMessage($"Error during Map {id} Event {eventNumWithError} (Index {i}) internal parsing starting near {M.hexParen(eventStartPos)}: {ex.Message}");
+                            M.debugMessage(ex.StackTrace);
+                            // loadSuccess 隐含为 false
+                        }
+
+                        // 最终成功条件：内部加载未抛异常 + 结尾字节检查通过 + Event对象自己确认加载完成
+                        bool overallSuccess = !internalLoadThrewException && tailByteCheckPassed && currentEvent != null && currentEvent.IsSuccessfullyLoaded;
+
+                        if (overallSuccess)
+                        {
+                            events.Add(currentEvent);
+                            eventAdded = true;
+                            M.logMessage($"   Map {id} Event {M.currentEventNum}: Successfully loaded and added.");
+                        }
+
+                        // 如果需要恢复（因为异常或结尾字节错误）
+                        if (recoveryNeeded)
+                        {
+                            int eventNumWithError = M.currentEventNum != 0 ? M.currentEventNum : (i + 1);
+                            M.logMessage($"   Map {id} Event {eventNumWithError}: Attempting recovery...");
+                            if (!M.TrySkipToNextEventStart(f, i, eventCount, calculatedEndOfChunk))
+                            {
+                                recoveryAttemptedAndFailed = true; // 标记恢复失败
+                                M.logMessage($"Recovery failed after error in Event {eventNumWithError}. Aborting reading remaining events in Map {id}.");
+                                f.Position = calculatedEndOfChunk; // 强制指针到块尾
+                                break; // 停止处理此地图的事件
+                            }
+                            else
+                            {
+                                M.logMessage($"   Map {id}: Recovery successful, continuing to next event index.");
+                            }
+                        }
+
+                        // 记录跳过信息（仅当未添加且恢复未尝试或失败时）
+                        if (!eventAdded)
+                        {
+                            int eventNumWithError = M.currentEventNum != 0 ? M.currentEventNum : (i + 1);
+                            // 只有在不需要恢复（说明是结尾字节问题但恢复逻辑没触发？）或者恢复失败时才记录，避免重复日志
+                            if (!recoveryNeeded || recoveryAttemptedAndFailed)
+                                M.logMessage($"Skipped adding Event {eventNumWithError} (Index {i}) from Map {id} due to load failure or incorrect end byte.");
+                        }
+
+                        M.logMessage($"-- Map {id}: Finished processing Event Index {i}. Current file position: {M.hexParen(f.Position)} --");
+
+                    } // End of for loop
+
+                    // 循环结束后，最终检查并调整文件指针
+                    if (f.Position < calculatedEndOfChunk)
+                    {
+                        M.logMessage($"Warning: Map {id}: Finished reading events loop, position {M.hexParen(f.Position)} is before expected end {M.hexParen(calculatedEndOfChunk)}. Setting position to end.");
+                        f.Position = calculatedEndOfChunk;
+                    }
+                    else if (f.Position > calculatedEndOfChunk)
+                    {
+                        // 这种情况通常意味着 TrySkipToNextEventStart 可能有 bug 或数据损坏极度严重
+                        M.logMessage($"Critical Warning: Map {id}: Position {M.hexParen(f.Position)} is BEYOND expected event chunk end {M.hexParen(calculatedEndOfChunk)}. Subsequent map data might be corrupted.");
+                    }
+                    else {
+                        M.logMessage($"Map {id}: Event processing finished. Final position {M.hexParen(f.Position)} matches expected chunk end.");
+                    }
+
+                }
                 
                 if (chunks.next(0x5a))
                     saveCount2003E = M.readLengthMultibyte(f);
                 if (chunks.next(0x5b))
                     saveCount = M.readLengthMultibyte(f);
                 
-                M.byteCheck(f, 0x00);
+                // M.byteCheck(f, 0x00);
                 
                 f.Close();
             }
