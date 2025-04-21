@@ -4914,75 +4914,115 @@ namespace RPGRewriter
         // Wraps overflowing lines in a message according to word wrap settings.
         public static string wordWrap(string str)
         {
-            if (userSettings["WordWrap"] == 0)
-                return str;
-            
-            bool fullBox = userSettings["WrapLineLimits"] == 2 || (userSettings["WrapLineLimits"] == 1 && !messageFaceOn);
-            bool faceBox = userSettings["WrapLineLimits"] == 3 || (userSettings["WrapLineLimits"] == 1 && messageFaceOn);
-            bool wrapImmediately = userSettings["WrapStyle"] == 2;
-            
-            int limit = fullBox? 50 : 38;
-            string[] lines = str.Split('\n');
+            // --- 新增：定义可换行的标点符号集合 ---
+            // 包括常见的中文全角标点和半角空格
+            var lineBreakChars = new HashSet<char> {
+                '，', // 全角逗号
+                '。', // 全角句号
+                '；', // 全角分号
+                '：', // 全角冒号
+                '？', // 全角问号
+                '！', // 全角感叹号
+                '、', // 顿号
+                ' ',  // 半角空格
+                // 可以根据需要添加更多，例如 ）】》”』 等右括号/引号
+            };
+            // --- 结束新增 ---
+
+            // 保留原有的逻辑获取限制 (limit)
+            bool fullBox = !messageFaceOn;
+            bool faceBox = messageFaceOn;
+            int limit = fullBox ? 50 : 38; // 这里的限制仍然是 *字节* 限制
+
+            // --- 修改后的换行处理逻辑 ---
+            string[] originalLines = str.Split('\n');
             List<string> newLines = new List<string>();
-            
-            for (int i = 0; i < lines.Length; i++)
+
+            foreach (string originalLine in originalLines)
             {
-                string line = lines[i];
-                
-                if (stringByteLength(line) > limit)
+                string currentSegment = originalLine;
+
+                // 使用 while 循环处理一个原始行可能需要分成多行的情况
+                while (stringByteLength(currentSegment) > limit)
                 {
-                    // In immediate mode, wrap no later than the last possible character.
-                    // In even mode, wrap no later than the average of the total character length.
-                    int breakCount = 1, maxBreak = 0;
-                    if (wrapImmediately)
-                        maxBreak = limit;
-                    else
+                    int breakIndex = -1; // 找到的最佳换行索引 (字符索引)
+                    bool breakFound = false;
+
+                    // 尝试在合理范围内寻找标点或空格
+                    // 从接近字节限制的字符位置开始向前查找
+                    // 注意：这里只是一个估算，因为字符和字节不一一对应
+                    // 我们从最后一个可能符合条件的字符开始向前找
+                    int searchStart = Math.Min(currentSegment.Length - 1, limit); // 从最多'limit'个字符处开始往前找
+
+                    for (int j = searchStart; j > 0; j--)
                     {
-                        maxBreak = line.Length / 2;
-                        if (maxBreak > limit)
+                        // 检查当前字符是否是允许的换行字符
+                        if (lineBreakChars.Contains(currentSegment[j]))
                         {
-                            maxBreak = line.Length / 3;
-                            breakCount = 2;
-                        }
-                        if (maxBreak > limit)
-                        {
-                            maxBreak = line.Length / 4;
-                            breakCount = 3;
+                            // 找到了一个潜在的换行点
+                            // 验证换行后的第一部分是否真的不超过字节限制
+                            string potentialFirstPart = currentSegment.Substring(0, j + 1); // 包含标点符号本身
+                            if (stringByteLength(potentialFirstPart) <= limit)
+                            {
+                                // 找到了一个有效的换行点
+                                breakIndex = j;
+                                breakFound = true;
+                                break; // 找到最靠右的有效换行点，停止内层循环
+                            }
+                            // 如果包含标点后仍超长，继续往前找更早的标点
                         }
                     }
-                    
-                    do
+
+                    // 如果找到了合适的标点/空格换行点
+                    if (breakFound)
                     {
-                        for (int j = maxBreak; j > 0; j--)
+                        newLines.Add(currentSegment.Substring(0, breakIndex + 1));
+                        currentSegment = currentSegment.Substring(breakIndex + 1);
+                    }
+                    // 如果没有找到标点/空格换行点，则执行强制换行
+                    else
+                    {
+                        int forceBreakIndex = -1;
+                        // 从头开始，找到第一个使得子串字节超限的位置
+                        for (int k = 1; k < currentSegment.Length; k++)
                         {
-                            if (j >= line.Length)
-                                continue;
-                            
-                            if (line[j] == ' ')
+                            if (stringByteLength(currentSegment.Substring(0, k + 1)) > limit)
                             {
-                                string firstLine = line.Substring(0, j);
-                                newLines.Add(firstLine);
-                                line = line.Substring(j + 1);
-                                
-                                // In immediate mode, force another loop if length still goes over.
-                                if (wrapImmediately && stringByteLength(line) > limit)
-                                    breakCount = 2;
+                                forceBreakIndex = k; // 在第 k 个字符后换行
                                 break;
                             }
                         }
-                        breakCount--;
-                    } while (breakCount > 0);
+
+                        // 如果找到了强制换行点
+                        if (forceBreakIndex > 0)
+                        {
+                            newLines.Add(currentSegment.Substring(0, forceBreakIndex));
+                            currentSegment = currentSegment.Substring(forceBreakIndex);
+                        }
+                        // 极端情况：连第一个字符都放不下，或者整行都没超（理论上不会进入while）
+                        // 为了防止死循环，直接添加剩余部分，虽然它会超长
+                        else
+                        {
+                            // if (!string.IsNullOrEmpty(currentSegment)) // 避免添加空行
+                            // {
+                            newLines.Add(currentSegment);
+                            Console.WriteLine($"Warning: Could not effectively wrap line segment within byte limit ({limit}): {currentSegment}");
+                            // }
+                            currentSegment = ""; // 清空，结束 while 循环
+                        }
+                    }
                 }
-                
-                // Add either the line that was already under limit, or the remaining broken-off line.
-                newLines.Add(line);
+
+                // 将处理完（或从未超长）的最后一段/原始段添加到结果列表
+                // if (!string.IsNullOrEmpty(currentSegment))
+                // {
+                newLines.Add(currentSegment);
+                // }
             }
-            
-            str = "";
-            for (int i = 0; i < newLines.Count; i++)
-                str += newLines[i] + (i < newLines.Count - 1? "\n" : "");
-            
-            return str;
+
+            // 使用换行符重新组合所有行
+            return string.Join("\n", newLines);
+            // --- 结束修改 ---
         }
         
         // Adds a message to the log.
