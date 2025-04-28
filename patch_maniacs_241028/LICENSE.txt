@@ -1,0 +1,28 @@
+Costura.Fody
+MIT License
+Copyright (c) 2012 Simon Cropp and contributors
+https://licenses.nuget.org/MIT
+
+
+
+
+Fody
+MIT License
+Copyright (c) Simon Cropp
+https://www.nuget.org/packages/Fody/6.5.5/license
+
+
+
+
+Resource.Embedder
+MIT License
+Copyright (c) Marc Stan
+https://licenses.nuget.org/MIT
+
+
+
+
+SharpZipLib
+MIT License
+Copyright (c) 2000-2018 SharpZipLib Contributors
+https://licenses.nuget.org/MIT

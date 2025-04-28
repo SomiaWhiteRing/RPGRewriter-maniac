@@ -1,0 +1,40 @@
+文章の表示					@Show Text				@10110
+顔グラフィックの設定		@Change Faceset			@10130
+選択肢の表示				@Show Choices			@10140
+数値入力の処理				@Input Number			@10150
+スイッチの操作				@Control Switches		@10210
+変数の操作					@Control Variables		@10220
+所持金の増減				@Change Gold			@10310
+アイテムの増減				@Change Items			@10320
+メンバーの入れ替え			@Change Party Member	@10330
+レベルの増減				@Change Level			@10420
+特殊技能の増減				@Change Skills			@10440
+装備の変更					@Change Equipment		@10450
+HPの増減					@Change HP				@10460
+MPの増減					@Change MP				@10470
+状態の変更					@Change State			@10480
+全回復						@Recvover All			@10490
+敵キャラHPの増減			@Change Enemy HP		@13110
+敵キャラMPの増減			@Change Enemy MP		@13120
+敵キャラ状態の変更			@Change Enemy State		@13130
+敵キャラの出現				@Enemy Encounter		@13150
+戦闘背景の変更				@Change Battleback		@13210
+画面の色調変更				@Tint Screen			@11030
+画面のフラッシュ			@Flash Screen			@11040
+画面のシェイク				@Shake Screen			@11050
+ピクチャーの表示			@Show Picture			@11110
+ピクチャーの移動			@Move Picture			@11120
+ピクチャーの消去			@Erase Picture			@11130
+戦闘アニメの表示			@Show Animation			@13260
+連続攻撃					@Action Times +			@1007
+100%脱出					@Force Escape			@1006
+ウェイト					@Wait					@11410
+BGMの演奏					@Play BGM				@11510
+BGMのフェードアウト			@Fadeout BGM			@11520
+効果音の演奏				@Play SE				@11550
+条件分岐					@Conditional Branch		@13310
+イベント処理の中断			@End Event Processing	@12310
+コモンイベントの呼び出し	@Call Common Event		@1005
+注釈						@Comment				@12410
+ゲームオーバー				@Game Over				@12420
+戦闘の中断					@Abort Battle			@13410

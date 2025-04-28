@@ -1,0 +1,126 @@
+文章の表示					@Show Text					@10110
+文章オプション変更			@Display Text Settings      @10120
+顔グラフィックの設定		@Change Faceset             @10130
+選択肢の表示				@Show Choices               @10140
+数値入力の処理				@Input Number               @10150    
+スイッチの操作				@Control Switches           @10210
+変数の操作					@Control Variables          @10220
+タイマーの操作				@Control Timer              @10230
+所持金の増減				@Change Gold                @10310
+アイテムの増減				@Change Items               @10320
+メンバーの入れ替え			@Change Party Memeber       @10330
+経験値の増減				@Change EXP                 @10410
+レベルの増減				@Change Level               @10420
+能力値の増減				@Change Parameters          @10430
+特殊技能の増減				@Change Skills              @10440
+装備の変更					@Change Equipment           @10450
+HPの増減					@Change HP                  @10460
+MPの増減					@Change MP                  @10470
+状態の変更					@Change State               @10480
+全回復						@Recover All                @10490
+ダメージの処理				@Damage Processing          @10500
+主人公の名前変更			@Change Actor Name          @10610
+主人公の肩書き変更			@Change Actor NickName      @10620
+主人公の歩行グラフィック変更@Change Actor Graphic       @10630
+主人公の顔グラフィック変更	@Change Actor Faceset       @10640
+乗り物グラフィックの変更	@Change Vehicle Graphic     @10650
+システムBGMの変更			@Change System BGM          @10660
+システム効果音の変更		@Change System SE           @10670
+システムグラフィックの変更	@Change System Graphic      @10680
+画面切り替え方式の変更		@Change Screen Transition   @10690
+戦闘の処理					@Battle Processing          @10710
+お店の処理					@Shop Processing            @10720
+宿屋の処理					@Inn Processing             @10730
+名前入力の処理				@Name Input Processing      @10740
+場所移動					@Transfer Player            @10810
+現在の場所を記憶			@Get Player Location        @10820
+記憶した場所へ移動			@Move to Variable Loacation @10830
+乗り物の乗降				@Get On/Off Vehicle         @10840
+乗り物の位置を設定			@Set Vehicle Location       @10850
+イベントの位置を設定		@SetEvent Location          @10860
+イベントの位置を交換		@Swap Event Location        @10870
+指定位置の地形ID取得		@Get Terrain ID             @10910
+指定位置のイベントID取得	@Get Event ID				@10920
+画面の消去					@Hide Screen                @11010
+画面の表示					@Show Screen                @11020
+画面の色調変更				@Tint Screen                @11030
+画面のフラッシュ			@Flash Screen               @11040
+画面のシェイク				@Shake Screen               @11050
+画面のスクロール			@Scroll Map                 @11060
+天候エフェクトの設定		@Set Weather Effect         @11070
+ピクチャーの表示			@Show Picture               @11110
+ピクチャーの移動			@Move Picture               @11120
+ピクチャーの消去			@Erase Picture              @11130
+戦闘アニメの表示			@Show Animation             @11210
+主人公の透明状態変更		@Show/Hide Player           @11310
+キャラクターのフラッシュ	@Flash Event                @11320
+キャラクターの動作指定		@Set Move Route             @11330
+指定動作の全実行			@Wait for All Movement      @11340
+指定動作の全解除			@Stop All Movement          @11350
+ウェイト					@Wait                       @11410
+BGMの演奏					@Play BGM                   @11510
+BGMのフェードアウト			@Fadeout BGM                @11520
+現在のBGMを記憶				@Memorize Current BGM       @11530
+記憶したBGMを演奏			@Play Memorized BGM         @11540
+効果音の演奏				@Play SE                    @11550
+ムービーの再生				@Play Movie                 @11560
+キー入力の処理				@Key Input Processing       @11610
+チップセットの変更			@Change Tileset             @11710
+遠景の変更					@Change Parallax Back       @11720
+敵出現歩数の変更			@Set Encounter Rate         @11740
+チップの置換				@Change Tile                @11750
+テレポート位置の増減		@Set Teleportation Point    @11810
+テレポート禁止の変更		@Teleportation On/Off       @11820
+エスケープ位置の設定		@Set Escape Location        @11830
+エスケープ禁止の変更		@Change Escape Access       @11840
+セーブ画面の呼び出し		@Open Save Menu             @11910
+セーブ禁止の変更			@Change Save Access         @11930
+メニュー画面の呼び出し		@Open Menu Screen           @11950
+メニュー画面禁止の変更		@Change Menu Access         @11960
+条件分岐					@Conditional Branch         @12010
+ラベルの設定				@Label                      @12110
+指定ラベルへ飛ぶ			@Jump to Label              @12120
+繰り返し処理				@Loop                       @12210
+繰り返し処理の中断			@Break Loop                 @12220
+イベント処理の中断			@End Event Processing       @12310
+イベントの一時消去			@Erase Event                @12320
+イベントの呼び出し			@Call Event                 @12330
+注釈						@Comment                    @12410
+ゲームオーバー				@Game Over                  @12420
+タイトル画面に戻す			@Return to Title Screen     @12510
+職業の変更					@Change Actor Class         @1008
+戦闘コマンドの変更			@Change BattleCommands		@1009
+ロード画面の呼び出し		@Open Load Menu				@5001
+シャットダウン				@Exit Game					@5002
+戦闘ウェイトの切り替え		@Toggle ATB Wait Mode		@5003    
+フルスクリーンの切り替え	@Toggle Fullscreen Mode		@5004
+オプション画面の呼び出し	@Open Video Options			@5005
+セーブ情報の取得			@Get Save Info				@3001
+セーブの実行				@Save						@3002
+ロードの実行				@Load						@3003
+ロード処理の終了			@End Load Process			@3004
+マウス座標の取得			@Get Mouse Position			@3005
+マウス座標の設定			@Set Mouse Position			@3006
+文字列ピクチャの表示		@Show String  Picture		@3007
+ピクチャ情報の取得			@Get Picture Info			@3008
+戦闘処理の制御				@Control Battle				@3009
+ATBゲージの操作				@Control ATB Gauge			@3010
+戦闘コマンドの変更Ex		@Battle Command EX			@3011
+戦闘情報の取得				@Get Battle Info			@3012
+変数配列の操作				@Control Var Array			@3013
+キー入力の処理EX			@Key Input Processing EX	@3014
+マップの書き換え			@Rewrite Map				@3015
+共有セーブの操作			@Control Shared Save		@3016
+ピクチャのID変更			@Set Picture ID				@3017
+ゲームのオプション設定		@Set Game Option			@3018
+コマンドの呼び出し			@Call Command				@3019
+文字列変数の操作			@Control String Variables	@3020
+ゲーム情報の取得			@Get Game Info				@3021
+ピクチャの編集				@Edit Picture				@3025
+画像の出力					@Output Image				@3026
+キャラクターの動作追加		@Add Move Route				@3027
+ピクチャの編集(チップ)		@Edit Picture(Tile)			@3028
+文章処理の制御				@Control Message			@3029
+スクリプト					@Script						@3030
+画面のズーム				@ZoomScreen					@3032
+コンソール					@Console					@3033
