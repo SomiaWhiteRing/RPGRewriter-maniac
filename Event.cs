@@ -71,7 +71,7 @@ namespace RPGRewriter
             {
                 // 如果发生异常，IsSuccessfullyLoaded 将保持 false
                 // 重新抛出异常，让 Map.cs 的 catch 块处理恢复逻辑
-                throw; 
+                throw ex;
             }
         }
         

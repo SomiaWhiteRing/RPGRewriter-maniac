@@ -1,6 +1,7 @@
 ﻿﻿using System;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Windows.Forms;
 using Newtonsoft.Json;
@@ -4906,9 +4907,13 @@ namespace RPGRewriter
         }
         
         // Gets byte length of string (using "to translate" write encoding), relevant for character limits.
+        private static readonly Regex styleCodeRegex = new Regex(@"\\[^\\]\[[^\]]*\]|\\[^\\]", RegexOptions.Compiled);
+        
         public static int stringByteLength(string str)
         {
-            return writeEncodings[S_TOTRANSLATE].GetBytes(str).Length;
+            // 计算字符长度的时候，要剥离所有如\!或\c[0]一类的样式代码
+            string cleanedString = styleCodeRegex.Replace(str, string.Empty);
+            return writeEncodings[S_TOTRANSLATE].GetBytes(cleanedString).Length;
         }
         
         // Wraps overflowing lines in a message according to word wrap settings.
