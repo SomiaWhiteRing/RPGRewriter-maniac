@@ -2250,6 +2250,9 @@ namespace RPGRewriter
                 detailSettings = new List<string>();
             if (extraneousSettings == null)
                 extraneousSettings = new List<string>();
+            // 尝试强制导出脸图变更信息
+            if (!detailSettings.Contains("CommandMessageFace"))
+                detailSettings.Add("CommandMessageFace");
             
             // True user preferences.
             userSettings["CommandIndents"] = 0;
@@ -2258,7 +2261,7 @@ namespace RPGRewriter
             userSettings["WrapStyle"] = 1;
             userSettingsStr["LogFilename"] = "log";
             userSettings["SuperVerboseStrings"] = 0;
-            userSettings["StringScriptDetails"] = 0;
+            userSettings["StringScriptDetails"] = 1;
             userSettings["StringScriptExtraneous"] = 0;
             userSettings["IgnoreLengthLimits"] = 0;
             userSettings["ForceEngineVersion"] = 0;
@@ -2362,7 +2365,7 @@ namespace RPGRewriter
             validateUserSetting("WrapStyle", 1, 2, 1);
             validateUserSettingFilename("LogFilename", "log");
             validateUserSetting("SuperVerboseStrings", 0, 1, 0);
-            validateUserSetting("StringScriptDetails", 0, 1, 0);
+            validateUserSetting("StringScriptDetails", 0, 1, 1);
             validateUserSetting("StringScriptExtraneous", 0, 1, 0);
             validateUserSetting("IgnoreLengthLimits", 0, 2, 0);
             validateUserSetting("ForceEngineVersion", 0, 3, 0);

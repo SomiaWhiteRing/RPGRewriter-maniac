@@ -36,6 +36,24 @@ namespace RPGRewriter
         public const int C_MANIACS3021 = 3021;
         public const int C_MANIACS3025 = 3025;
         public const int C_MANIACS3026 = 3026;
+        public const int C_MANIACS3002 = 3002; // セーブの実行 (Execute Save)
+        public const int C_MANIACS3004 = 3004; // ロード処理の終了 (End Load Processing)
+        public const int C_MANIACS3006 = 3006; // マウス座標の設定 (Set Mouse Coordinates)
+        public const int C_MANIACS3009 = 3009; // 戦闘処理の制御 (Control Battle Processing)
+        public const int C_MANIACS3010 = 3010; // ATBゲージの操作 (Operate ATB Gauge)
+        public const int C_MANIACS3011 = 3011; // 戦闘コマンドの変更EX (Change Battle Command EX)
+        public const int C_MANIACS3012 = 3012; // 戦闘情報の取得 (Get Battle Information)
+        public const int C_MANIACS3015 = 3015; // マップの書き換え (Rewrite Map)
+        public const int C_MANIACS3017 = 3017; // ピクチャのID変更 (Change Picture ID)
+        public const int C_MANIACS3019 = 3019; // コマンドの呼び出し (Call Command)
+        public const int C_MANIACS3020 = 3020; // 文字列変数の操作 (Operate String Variables)
+        public const int C_MANIACS3027 = 3027; // キャラの動作追加 (Add Character Action)
+        public const int C_MANIACS3028 = 3028; // ピクチャ編集(チップ) (Picture Edit (Chip))
+        public const int C_MANIACS3029 = 3029; // 文章処理の制御 (Control Text Processing)
+        public const int C_MANIACS3030 = 3030; // スクリプト(1行目) (Script (Line 1))
+        public const int C_MANIACS3031 = 3031; // スクリプト(2行目~) (Script (Line 2+))
+        public const int C_MANIACS3032 = 3032; // 画面のズーム (Screen Zoom)
+        public const int C_MANIACS3033 = 3033; // コンソール (Console)
         public const int C_CALLLOAD = 5001;
         public const int C_EXITGAME = 5002;
         public const int C_TOGGLEATBMODE = 5003;
@@ -375,6 +393,43 @@ namespace RPGRewriter
                 result = command3025ManiacsUnknown();
             else if (opcode == C_MANIACS3026)
                 result = command3026ManiacsUnknown();
+            else if (opcode == C_MANIACS3002)
+                result = command3002ManiacsExecuteSave();
+            else if (opcode == C_MANIACS3004)
+                result = command3004ManiacsEndLoadProcessing();
+            else if (opcode == C_MANIACS3006)
+                result = command3006ManiacsSetMouseCoords();
+            else if (opcode == C_MANIACS3009)
+                result = command3009ManiacsControlBattleProcessing();
+            else if (opcode == C_MANIACS3010)
+                result = command3010ManiacsOperateATBGauge();
+            else if (opcode == C_MANIACS3011)
+                result = command3011ManiacsChangeBattleCommandEX();
+            else if (opcode == C_MANIACS3012)
+                result = command3012ManiacsGetBattleInfo();
+            else if (opcode == C_MANIACS3015)
+                result = command3015ManiacsRewriteMap();
+            else if (opcode == C_MANIACS3017)
+                result = command3017ManiacsChangePictureID();
+            else if (opcode == C_MANIACS3019)
+                result = command3019ManiacsCallCommand();
+            else if (opcode == C_MANIACS3020)
+                result = command3020ManiacsOperateStringVariables();
+            // 3021 已存在
+            else if (opcode == C_MANIACS3027)
+                result = command3027ManiacsAddCharacterAction();
+            else if (opcode == C_MANIACS3028)
+                result = command3028ManiacsPictureEditChip();
+            else if (opcode == C_MANIACS3029)
+                result = command3029ManiacsControlTextProcessing();
+            else if (opcode == C_MANIACS3030)
+                result = command3030ManiacsScriptLine1();
+            else if (opcode == C_MANIACS3031)
+                result = command3031ManiacsScriptLine2Plus();
+            else if (opcode == C_MANIACS3032)
+                result = command3032ManiacsScreenZoom();
+            else if (opcode == C_MANIACS3033)
+                result = command3033ManiacsConsole();
             else if (opcode == C_CALLLOAD)
                 result = command5001CallLoad();
             else if (opcode == C_EXITGAME)
@@ -3374,45 +3429,187 @@ namespace RPGRewriter
             return "Stop Battle";
         }
 
-           string command3001ManiacsUnknown()
-   {
+        string command3001ManiacsUnknown()
+        {
             if (!HasEnoughArgs(1))
             {
                 return "command3001ManiacsUnknown: [Error: Invalid arguments]";
             }
-            
-       // 根据错误信息，这个命令有12个参数
-       string result = "Maniacs Script 3001: ";
-       if (args != null && HasEnoughArgs(0 + 1))
-       {
-           result += "Target:" + SafeGetArg(0);
-           for (int i = 1; i < args.Length && i < 12; i++)
-           {
-               result += ", arg" + i + ":" + args[i];
-           }
-       }
-       return result;
-   }
+                    
+            // 根据错误信息，这个命令有12个参数
+            string result = "Maniacs Script 3001: ";
+            if (args != null && HasEnoughArgs(0 + 1))
+            {
+                result += "Target:" + SafeGetArg(0);
+                for (int i = 1; i < args.Length && i < 12; i++)
+                {
+                    result += ", arg" + i + ":" + args[i];
+                }
+            }
+            return result;
+        }
 
-   string command3003ManiacsUnknown()
-   {
+        string command3003ManiacsUnknown()
+        {
             if (!HasEnoughArgs(1))
             {
                 return "command3003ManiacsUnknown: [Error: Invalid arguments]";
             }
             
-       // 根据错误信息，这个命令有2个参数
-       string result = "Maniacs Script 3003: ";
-       if (args != null && HasEnoughArgs(0 + 1))
-       {
-           result += "Target:" + SafeGetArg(0);
-           for (int i = 1; i < args.Length && i < 2; i++)
-           {
-               result += ", arg" + i + ":" + args[i];
-           }
-       }
-       return result;
-   }
+            // 根据错误信息，这个命令有2个参数
+            string result = "Maniacs Script 3003: ";
+            if (args != null && HasEnoughArgs(0 + 1))
+            {
+                result += "Target:" + SafeGetArg(0);
+                for (int i = 1; i < args.Length && i < 2; i++)
+                {
+                    result += ", arg" + i + ":" + args[i];
+                }
+            }
+            return result;
+        }
+
+        string command3002ManiacsExecuteSave()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Execute Save (3002): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：存档槽位?)
+        }
+
+        string command3004ManiacsEndLoadProcessing()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs End Load Processing (3004): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义
+        }
+
+        string command3006ManiacsSetMouseCoords()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Set Mouse Coordinates (3006): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：X坐标, Y坐标, 是否变量?)
+        }
+
+        string command3009ManiacsControlBattleProcessing()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Control Battle Processing (3009): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：控制类型, 目标, 值?)
+        }
+
+        string command3010ManiacsOperateATBGauge()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Operate ATB Gauge (3010): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：目标(敌/我), 操作类型, 值?)
+        }
+
+        string command3011ManiacsChangeBattleCommandEX()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Change Battle Command EX (3011): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：角色, 命令槽位, 新命令ID, 添加/移除?)
+        }
+
+        string command3012ManiacsGetBattleInfo()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Get Battle Information (3012): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：信息类型, 目标变量?)
+        }
+
+        string command3015ManiacsRewriteMap()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Rewrite Map (3015): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：图层, X, Y, 宽度, 高度, 新图块ID, 是否变量?)
+        }
+
+        string command3017ManiacsChangePictureID()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Change Picture ID (3017): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：原ID, 新ID, 范围?)
+        }
+
+        string command3019ManiacsCallCommand()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Call Command (3019): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：目标指令代码, 参数?)
+        }
+
+        string command3020ManiacsOperateStringVariables()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Operate String Variables (3020): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：目标变量, 操作类型, 源/值, 范围?)
+        }
+
+        string command3027ManiacsAddCharacterAction()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Add Character Action (3027): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (可能类似移动路线，结构复杂?)
+        }
+
+        string command3028ManiacsPictureEditChip()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Picture Edit (Chip) (3028): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：目标图片ID, X, Y, 图块ID?)
+        }
+
+        string command3029ManiacsControlTextProcessing()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Control Text Processing (3029): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：设置项, 新值?)
+        }
+
+        string command3030ManiacsScriptLine1()
+        {
+            // 通常脚本指令的第一行包含脚本内容
+            return $"Maniacs Script (Line 1) (3030): {stringArg}";
+            // Args 通常为空或有特殊用途
+        }
+
+        string command3031ManiacsScriptLine2Plus()
+        {
+            // 脚本指令的后续行
+            return $"Maniacs Script (Line 2+) (3031): {stringArg}";
+             // Args 通常为空或有特殊用途
+        }
+
+        string command3032ManiacsScreenZoom()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Screen Zoom (3032): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：缩放比例, 中心X, 中心Y, 时间, 等待?)
+        }
+
+        string command3033ManiacsConsole()
+        {
+             string argString = GetArgStringForPlaceholder();
+            // 可能用于向游戏内控制台输出信息
+            return $"Maniacs Console (3033): Message='{stringArg}', Args=[{argString}]";
+        }
+
+        // 辅助方法，用于生成参数占位符字符串
+        private string GetArgStringForPlaceholder()
+        {
+            if (args == null || args.Length == 0)
+            {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < args.Length; i++)
+            {
+                sb.Append(i > 0 ? ", " : "");
+                sb.Append($"Arg{i}:{args[i]}");
+            }
+            return sb.ToString();
+        }
         
         // Replaces stringArg. Returns whether the new one differs from the original.
         public bool setStringArg(string str)
