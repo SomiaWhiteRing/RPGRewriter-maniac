@@ -288,10 +288,10 @@ namespace RPGRewriter
                     }
                 } // End of if (chunks.next(0x51))
                 
-                if (chunks.next(0x5a))
-                    saveCount2003E = M.readLengthMultibyte(f);
-                if (chunks.next(0x5b))
-                    saveCount = M.readLengthMultibyte(f);
+                // if (chunks.next(0x5a))
+                //     saveCount2003E = M.readLengthMultibyte(f);
+                // else if (chunks.next(0x5b))
+                //     saveCount = M.readLengthMultibyte(f);
                 
                 // M.byteCheck(f, 0x00);
                 
