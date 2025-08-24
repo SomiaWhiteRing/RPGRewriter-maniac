@@ -4644,6 +4644,7 @@ namespace RPGRewriter
         {
             currentPage = "Page " + pageNum;
             currentPageNum = pageNum;
+            M.messageFaceOn = false; // Reset face state for each new page processing.
             
             if (importingStringArgs == null)
                 return;
