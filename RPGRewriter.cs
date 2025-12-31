@@ -264,6 +264,8 @@ namespace RPGRewriter
         [STAThread]
         static void Main(string[] args)
         {
+            try
+            {
             Console.Title = "RM2K Translation Assistant";
             
             UNICODE = Encoding.UTF8;
@@ -274,10 +276,10 @@ namespace RPGRewriter
             writeEncodingIDs = new int[4];
             for (int i = 0; i < 4; i++)
             {
-                readEncodings[S_CONSTANT] = Encoding.GetEncoding(932);
-                readEncodingIDs[S_CONSTANT] = 932;
-                writeEncodings[S_CONSTANT] = Encoding.GetEncoding(932);
-                writeEncodingIDs[S_CONSTANT] = 932;
+                readEncodings[i] = Encoding.GetEncoding(932);
+                readEncodingIDs[i] = 932;
+                writeEncodings[i] = Encoding.GetEncoding(932);
+                writeEncodingIDs[i] = 932;
             }
             
             loadUserSettings(true);
@@ -846,6 +848,20 @@ namespace RPGRewriter
                 
                 if (commandLineMode)
                     menuShow = false;
+            }
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    string log = "Unhandled exception\n" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "\n" + ex.ToString();
+                    File.WriteAllText("error.log", log, Encoding.UTF8);
+                    Console.Error.WriteLine("Unexpected error occurred. See error.log for details.");
+                }
+                catch
+                {
+                    Console.Error.WriteLine("Unexpected error occurred and logging failed.");
+                }
             }
         }
         
@@ -2528,8 +2544,8 @@ namespace RPGRewriter
             catch (Exception)
             {
                 Console.WriteLine(num + " is not a valid codepage number. Defaulting to Shift-JIS.");
-                readEncodings[strType] = Encoding.GetEncoding(932);
-                readEncodingIDs[strType] = 932;
+                writeEncodings[strType] = Encoding.GetEncoding(932);
+                writeEncodingIDs[strType] = 932;
                 enterToContinue();
             }
         }

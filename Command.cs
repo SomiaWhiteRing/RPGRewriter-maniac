@@ -207,6 +207,13 @@ namespace RPGRewriter
         static string[] classChangeSkills = { "Retain Skills", "Add New Skills Deleting Old", "Add New Skills Keeping Old" };
         static string[] classChangeStats = { "Retain Stats", "Halve Stats", "Set Stats to Level 1", "Set Stats Per New Class"};
         #endregion
+
+        // Safely get a label from an array; falls back to numeric code when out of range.
+        static string SafeLabel(string[] arr, int index)
+        {
+            if (arr == null) return "Unknown(" + index + ")";
+            return index >= 0 && index < arr.Length ? arr[index] : ("Unknown(" + index + ")");
+        }
         
         public Command(FileStream f)
         {
@@ -1580,13 +1587,13 @@ namespace RPGRewriter
             else if (operand == 4) // Item
                 rightSide = M.getDataItem(value) + " Quantity " + (value2 == 0? "(Owned)" : "(Equipped)");
             else if (operand == 5) // Hero
-                rightSide = M.getDataHero(value) + "'s " + heroQualities[value2];
+                rightSide = M.getDataHero(value) + "'s " + SafeLabel(heroQualities, value2);
             else if (operand == 6) // Event
-                rightSide = M.getTargetEvent(value) + "'s " + eventQualities[value2];
+                rightSide = M.getTargetEvent(value) + "'s " + SafeLabel(eventQualities, value2);
             else if (operand == 7) // Other
-                rightSide = miscData[value];
+                rightSide = SafeLabel(miscData, value);
             else if (operand == 8) // Enemy (In Battle)
-                rightSide = "Enemy " + (value + 1) + "'s " + enemyStats[value2];
+                rightSide = "Enemy " + (value + 1) + "'s " + SafeLabel(enemyStats, value2);
             
             return "Change Variable: " + variableName + " " + operations[operation] + " " + rightSide;
         }
