@@ -454,7 +454,9 @@ namespace RPGRewriter
             
             if (!M.readingDataNames)
             {
-                str = new string[255];
+                // Some projects include additional vocab entries beyond 0x99 (e.g., 0xA1+),
+                // so allocate the full byte range.
+                str = new string[256];
                 
                 // Some projects include additional vocab entries beyond 0x99 (e.g., 0xA1+).
                 // Read the full byte range to avoid leaving unparsed chunks before the 0x00 terminator.
@@ -650,9 +652,12 @@ namespace RPGRewriter
         // Writes data.
         override protected void myWrite()
         {
-            for (byte i = 0x01; i <= 0x99; i++)
-                if (chunks.wasNext(i))
-                    M.writeString(str[i], M.S_TOTRANSLATE);
+            for (int i = 0x01; i <= 0xff; i++)
+            {
+                byte chunkId = (byte)i;
+                if (chunks.wasNext(chunkId))
+                    M.writeString(str[chunkId], M.S_TOTRANSLATE);
+            }
             
             M.writeByte(0x00);
             
