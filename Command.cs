@@ -12,6 +12,10 @@ namespace RPGRewriter
         int[] args;
         string[] trueChoices;
         
+        long debugCommandStartPos = -1;
+        long debugAfterHeaderPos = -1;
+        string debugNextBytes = "";
+        
         int moveRouteTarget;
         int moveRouteFreq;
         bool moveRouteRepeat;
@@ -21,6 +25,8 @@ namespace RPGRewriter
         #region // Command Codes //
         
         public const int C_BLANK = 10;
+        // Observed in Maniacs-patched projects: opcode 40 appears as a no-op placeholder (stringArg is a single NUL, argCount = 0).
+        public const int C_MANIACS_NOP = 40;
         public const int C_BATTLECALLEVENT = 1005;
         public const int C_FORCEFLEE = 1006;
         public const int C_ENABLECOMBO = 1007;
@@ -233,8 +239,32 @@ namespace RPGRewriter
         // Loads a single command within a page.
         override public void load(FileStream f)
         {
+            debugCommandStartPos = f.Position;
             opcode = M.readMultibyte(f);
             indent = M.readMultibyte(f);
+            debugAfterHeaderPos = f.Position;
+            debugNextBytes = "";
+            try
+            {
+                long previewPos = f.Position;
+                byte[] preview = new byte[48];
+                int bytesRead = f.Read(preview, 0, preview.Length);
+                f.Position = previewPos;
+                if (bytesRead > 0)
+                {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < bytesRead; i++)
+                    {
+                        if (i != 0) sb.Append(' ');
+                        sb.Append(M.hex(preview[i], 2));
+                    }
+                    debugNextBytes = sb.ToString();
+                }
+            }
+            catch
+            {
+                debugNextBytes = "";
+            }
             
             int mode = getMode();
             
@@ -366,6 +396,8 @@ namespace RPGRewriter
             
             if (opcode == C_BLANK)
                 result = command10Blank();
+            else if (opcode == C_MANIACS_NOP)
+                result = command0040ManiacsNoOp();
             else if (opcode == C_BATTLECALLEVENT)
                 result = command1005BattleCallEvent();
             else if (opcode == C_FORCEFLEE)
@@ -688,6 +720,10 @@ namespace RPGRewriter
             else if (opcode != 0)
             {
                 Console.WriteLine("UNSUPPORTED OPCODE " + opcode + " " + M.currentPosition());
+                if (debugCommandStartPos >= 0 && debugAfterHeaderPos >= 0)
+                    Console.WriteLine("Command stream position: start " + M.hexParen(debugCommandStartPos) + ", after header " + M.hexParen(debugAfterHeaderPos) + ".");
+                if (debugNextBytes != "")
+                    Console.WriteLine("Next bytes: " + debugNextBytes);
                 Console.WriteLine(stringArg);
                 for (int i = 0; i < args.Length; i++)
                     Console.WriteLine("args " + i + ": " + args[i]);
@@ -698,7 +734,7 @@ namespace RPGRewriter
             {
                 string commandName = "";
                 bool nameFork = isNameFork();
-                if (opcode == C_MESSAGE || isRemovedMessage())
+                if (opcode == C_MESSAGE || opcode == C_MESSAGEFOLLOW || isRemovedMessage())
                     commandName = "Message";
                 else if (opcode == C_CHOICE)
                     commandName = "Choice";
@@ -708,6 +744,12 @@ namespace RPGRewriter
                     commandName = "TitleChange";
                 else if (opcode == C_SHOWSTRINGPICTURE)
                     commandName = "StringPicture";
+                else if (isManiacsCallCommand())
+                    commandName = "ManiacsCallCommand";
+                else if (isManiacsStringVariable())
+                    commandName = "ManiacsStringVariable";
+                else if (isManiacsScriptLine())
+                    commandName = "ManiacsScript";
                 else if (nameFork)
                     commandName = "NameFork";
                 
@@ -776,6 +818,19 @@ namespace RPGRewriter
                     if (M.getDetailSetting("OriginalCommandStrings"))
                         header = "//" + M.getOriginalString(commandName, exportStringArg).Replace("\n", "\n//") + lb + header;
                     else if (M.generatingOriginalStringDB) // Call method regardless to add string to database
+                        M.getOriginalString(commandName, exportStringArg);
+                    
+                    return header + exportStringArg + lb + terminator;
+                }
+                else if (isManiacsCallCommand() || isManiacsStringVariable() || isManiacsScriptLine())
+                {
+                    M.wroteStringInPage = true;
+                    
+                    string exportStringArg = getStringArg();
+                    
+                    if (M.getDetailSetting("OriginalCommandStrings"))
+                        header = "//" + M.getOriginalString(commandName, exportStringArg).Replace("\n", "\n//") + lb + header;
+                    else if (M.generatingOriginalStringDB)
                         M.getOriginalString(commandName, exportStringArg);
                     
                     return header + exportStringArg + lb + terminator;
@@ -1626,6 +1681,12 @@ namespace RPGRewriter
             
             return "Timer" + (whichTimer == 1? " 2" : "") + ": "
                 + (operation == 0? "Set" : operation == 1? "Start" : "Stop") + setStart;
+        }
+        
+        string command0040ManiacsNoOp()
+        {
+            // Maniacs-patched projects can contain placeholder commands with opcode 40 that do nothing.
+            return "";
         }
         
         string command10310ChangeMoney() // d0 46
@@ -3767,6 +3828,11 @@ namespace RPGRewriter
             return opcode == 0;
         }
         
+        public bool isManiacsNoOp()
+        {
+            return opcode == C_MANIACS_NOP;
+        }
+        
         // Returns whether the command is a textbox-starting Message command, not a Message Follow or an extra box with a dummy argument added by the program.
         public bool isMessageStart()
         {
@@ -3835,6 +3901,21 @@ namespace RPGRewriter
         public bool isStringPicture()
         {
             return opcode == C_SHOWSTRINGPICTURE;
+        }
+        
+        public bool isManiacsCallCommand()
+        {
+            return opcode == C_MANIACS3019;
+        }
+        
+        public bool isManiacsStringVariable()
+        {
+            return opcode == C_MANIACS3020;
+        }
+        
+        public bool isManiacsScriptLine()
+        {
+            return opcode == C_MANIACS3030 || opcode == C_MANIACS3031;
         }
         
         // Returns whether the command is a blank command (with or without a marking argument).

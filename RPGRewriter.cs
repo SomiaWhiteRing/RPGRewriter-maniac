@@ -1793,6 +1793,9 @@ namespace RPGRewriter
                                || line.ToLower().Contains("#titlechange#")
                                || line.ToLower().Contains("#namefork#")
                                || line.ToLower().Contains("#stringpicture#")
+                               || line.ToLower().Contains("#maniacscallcommand#")
+                               || line.ToLower().Contains("#maniacsscript#")
+                               || line.ToLower().Contains("#maniacsstringvariable#")
                                || line.ToLower().Contains("#eventname#")
                                || line.ToLower().Contains("#commoneventname#")
                                || line.ToLower().Contains("#troopname#")))
@@ -1813,6 +1816,12 @@ namespace RPGRewriter
                                 commandName = "NameFork";
                             else if (line.ToLower().Contains("#stringpicture#"))
                                 commandName = "StringPicture";
+                            else if (line.ToLower().Contains("#maniacscallcommand#"))
+                                commandName = "ManiacsCallCommand";
+                            else if (line.ToLower().Contains("#maniacsscript#"))
+                                commandName = "ManiacsScript";
+                            else if (line.ToLower().Contains("#maniacsstringvariable#"))
+                                commandName = "ManiacsStringVariable";
                             else if (line.ToLower().Contains("#eventname#"))
                                 commandName = "eventname"; // Lowercase since it uses database-style approach
                             else if (line.ToLower().Contains("#commoneventname#"))
@@ -3720,10 +3729,19 @@ namespace RPGRewriter
             byte bRead = readByte(f);
             if (b != bRead)
             {
-                Console.WriteLine("Warning! A byte check failed.\n"
-                                + "(At position " + hexParen(f.Position - 1) + ", read " + hexParen(bRead, 2) + ", should be " + hexParen(b, 2) + ".)\n"
-                                + "Possible corrupt file or program bug.");
-                throw new Exception();
+                string pos = hexParen(f.Position - 1);
+                string message =
+                    "Byte check failed at " + pos
+                    + " (read " + hexParen(bRead, 2) + ", expected " + hexParen(b, 2) + ").\n"
+                    + "Context: File=" + currentFile
+                    + ", Event=" + currentEvent
+                    + (currentEventNum != 0 ? (" #" + currentEventNum) : "")
+                    + (currentPageNum != 0 ? (", Page " + currentPageNum) : "")
+                    + (currentLine != "" ? (", Line=" + currentLine) : "")
+                    + ".";
+                
+                Console.WriteLine("Warning! " + message);
+                throw new Exception(message);
             }
         }
         
@@ -3786,8 +3804,8 @@ namespace RPGRewriter
         public static byte[] skipChunkRange(FileStream f, byte start, byte end)
         {
             List<byte> bytesRead = new List<byte>();
-            for (byte i = start; i <= end; i++)
-                bytesRead.AddRange(skipChunk(f, i));
+            for (int i = start; i <= end; i++)
+                bytesRead.AddRange(skipChunk(f, (byte)i));
             return bytesRead.ToArray();
         }
         
@@ -4673,7 +4691,8 @@ namespace RPGRewriter
                 command.updateMessageFaceOn();
                 
                 if (command.isMessageStart() || command.isChoice()
-                 || command.isNameChange() || command.isTitleChange() || command.isNameFork() || command.isStringPicture())
+                 || command.isNameChange() || command.isTitleChange() || command.isNameFork() || command.isStringPicture()
+                 || command.isManiacsCallCommand() || command.isManiacsStringVariable() || command.isManiacsScriptLine())
                 {
                     if (importingStringArgs.ContainsKey(currentEventNum))
                     {
@@ -4687,6 +4706,9 @@ namespace RPGRewriter
                                                 : command.isTitleChange()? "TitleChange"
                                                 : command.isNameFork()? "NameFork"
                                                 : command.isStringPicture()? "StringPicture"
+                                                : command.isManiacsCallCommand()? "ManiacsCallCommand"
+                                                : command.isManiacsStringVariable()? "ManiacsStringVariable"
+                                                : command.isManiacsScriptLine()? "ManiacsScript"
                                                 : "";
                             
                             if (importingStringArgs[currentEventNum][currentPageNum].ContainsKey(commandShort))
@@ -4796,7 +4818,8 @@ namespace RPGRewriter
                                             Console.WriteLine(localStr + ": Choice count does not match.");
                                     }
                                     else if (command.isNameChange() || command.isTitleChange()
-                                          || command.isNameFork() || command.isStringPicture()) // Just replace string, easy
+                                          || command.isNameFork() || command.isStringPicture()
+                                          || command.isManiacsCallCommand() || command.isManiacsStringVariable() || command.isManiacsScriptLine()) // Just replace string, easy
                                     {
                                         if (command.setStringArg(importArg))
                                             changesMade = true;

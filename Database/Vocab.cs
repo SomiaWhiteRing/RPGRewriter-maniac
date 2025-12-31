@@ -456,15 +456,20 @@ namespace RPGRewriter
             {
                 str = new string[255];
                 
-                for (byte i = 0x01; i <= 0x99; i++)
-                    if (chunks.next(i))
-                        str[i] = M.readString(f, M.S_TOTRANSLATE);
+                // Some projects include additional vocab entries beyond 0x99 (e.g., 0xA1+).
+                // Read the full byte range to avoid leaving unparsed chunks before the 0x00 terminator.
+                for (int i = 0x01; i <= 0xff; i++)
+                {
+                    byte chunkId = (byte)i;
+                    if (chunks.next(chunkId))
+                        str[chunkId] = M.readString(f, M.S_TOTRANSLATE);
+                }
                 
                 M.byteCheck(f, 0x00);
             }
             else // Skip everything.
             {
-                M.skipChunkRange(f, 0x01, 0x99);
+                M.skipChunkRange(f, 0x01, 0xff);
                 M.byteCheck(f, 0x00);
             }
         }
