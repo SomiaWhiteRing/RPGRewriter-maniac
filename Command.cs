@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Text;
 using System.IO;
+using System.Text.RegularExpressions;
 
 namespace RPGRewriter
 {
@@ -276,6 +277,235 @@ namespace RPGRewriter
                 args = new int[argCount];
                 for (int i = 0; i < argCount; i++)
                     args[i] = M.readMultibyte(f);
+
+                // Special-case: Maniacs 2003 "Show String Picture" (3007)
+                // The stringArg layout is: 0x01 + [display text] + 0x01 + [font] + 0x01 + [system graphic filename]
+                // - In Rewriting mode: rewrite the embedded System filename segment using the normal replacement list.
+                //   If no replacement is found, try to auto-map to an existing ASCII-escaped filename in the System folder (e.g., System戦闘 -> Systemu6226u95d8).
+                // - In Checking mode: treat the embedded System filename as a file reference so missing ones are logged.
+                try
+                {
+                    if (opcode == C_SHOWSTRINGPICTURE && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (stringArg[0] == (char)0x01)
+                        {
+                            string[] parts = stringArg.Substring(1).Split((char)0x01);
+                            // parts[0] = display text; parts[1+] = font/system/others (顺序在不同工程可能不同)
+                            if (parts != null && parts.Length >= 2)
+                            {
+                                int sysIndex = -1;
+                                string sysDir = M.gamePath + "\\" + M.FOLDER[M.M_SYSTEM];
+                                DirectoryInfo root = Directory.Exists(sysDir)? new DirectoryInfo(sysDir) : null;
+
+                                // 选择最可能是系统图形名的字段：
+                                // 1) 以 "System"/"system" 开头；或 2) 含非ASCII且其 uXXXX 形式在磁盘存在；或 3) 映射表有替换。
+                                for (int k = 1; k < parts.Length; k++)
+                                {
+                                    string candRaw = parts[k].Trim();
+                                    if (string.IsNullOrEmpty(candRaw)) continue;
+                                    string cand = Path.GetFileName(candRaw);
+                                    bool startsWithSystem = cand.StartsWith("System") || cand.StartsWith("system");
+                                    bool nonAscii = false; foreach (char c in cand) { if (c > 0x7F) { nonAscii = true; break; } }
+                                    bool asciiHit = false;
+                                    if (nonAscii && root != null)
+                                    {
+                                        string asciiCandidate = buildAsciiUEscapedName(cand);
+                                        try { asciiHit = root.GetFiles(asciiCandidate + ".*").Length > 0; } catch { asciiHit = false; }
+                                    }
+                                    bool hasMapping = false;
+                                    try { hasMapping = M.rewriteString(M.M_SYSTEM, cand) != cand; } catch { }
+
+                                    if (startsWithSystem || asciiHit || hasMapping)
+                                    {
+                                        sysIndex = k; break;
+                                    }
+                                }
+
+                                if (sysIndex != -1)
+                                {
+                                    string systemNameOriginal = parts[sysIndex].Trim();
+                                    if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                                    {
+                                        string systemName = Path.GetFileName(systemNameOriginal);
+                                        if (!string.IsNullOrEmpty(systemName))
+                                        {
+                                            string replaced = ReplaceSystemBaseName(systemName);
+                                            if (replaced != systemName)
+                                            {
+                                                parts[sysIndex] = replaced;
+                                                stringArg = ((char)0x01).ToString() + string.Join(((char)0x01).ToString(), parts);
+                                                M.changesMade = true;
+                                            }
+                                        }
+                                    }
+
+                                    if (M.globalMode == "Checking")
+                                    {
+                                        string candidate = Path.GetFileName(systemNameOriginal);
+                                        if (!string.IsNullOrEmpty(candidate))
+                                            M.checkStringValidForMode(candidate, M.M_SYSTEM);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Swallow parsing errors; this is a best-effort checker and must not affect normal loading.
+                }
+
+                // Maniacs 3029: Control Text Processing — 有些工程在此内嵌 System 文件名
+                try
+                {
+                    if (opcode == C_MANIACS3029 && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            string updated = stringArg;
+
+                            // Pattern A: System/<filename>
+                            updated = Regex.Replace(updated, @"(?i)System/([^ \t\r\n/\\]+)", match =>
+                            {
+                                string baseName = match.Groups[1].Value;
+                                string replaced = ReplaceSystemBaseName(baseName);
+                                if (replaced != baseName)
+                                    M.changesMade = true;
+                                return "System/" + replaced;
+                            });
+
+                            // Pattern B: 以 System 开头的独立 token，且包含非 ASCII（已是英文名则跳过）
+                            updated = Regex.Replace(updated, @"(?<![A-Za-z0-9_/\\-])(System[^\x00-\x1F\x7F\s/\\]+)", match =>
+                            {
+                                string token = match.Groups[1].Value;
+                                bool hasNonAscii = false;
+                                foreach (char c in token) { if (c > 0x7F) { hasNonAscii = true; break; } }
+                                if (!hasNonAscii)
+                                    return token;
+                                string replaced = ReplaceSystemBaseName(token);
+                                if (replaced != token)
+                                    M.changesMade = true;
+                                return replaced;
+                            });
+
+                            stringArg = updated;
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            foreach (Match m in Regex.Matches(stringArg, @"(?i)System/([^ \t\r\n/\\]+)"))
+                            {
+                                string name = m.Groups[1].Value;
+                                if (!string.IsNullOrEmpty(name))
+                                    M.checkStringValidForMode(name, M.M_SYSTEM);
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // Maniacs 3019: Call Command — 有些工程把命令及其参数写在 stringArg，中可能直接出现 System 引用
+                try
+                {
+                    if (opcode == C_MANIACS3019 && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            string updated = stringArg;
+                            // 支持两种常见样式：System/<name> 与以 System 开头的非 ASCII token
+                            updated = Regex.Replace(updated, @"(?i)System[\\/]+([^ \t\r\n/\\]+)", match =>
+                            {
+                                string baseName = match.Groups[1].Value;
+                                string replaced = ReplaceSystemBaseName(baseName);
+                                if (replaced != baseName) M.changesMade = true;
+                                return "System/" + replaced; // 统一写成正斜杠
+                            });
+
+                            updated = Regex.Replace(updated, @"(?<![A-Za-z0-9_/\\-])(System[^\x00-\x1F\x7F\s/\\]+)", match =>
+                            {
+                                string token = match.Groups[1].Value;
+                                bool hasNonAscii = false; foreach (char c in token) { if (c > 0x7F) { hasNonAscii = true; break; } }
+                                if (!hasNonAscii) return token;
+                                string replaced = ReplaceSystemBaseName(token);
+                                if (replaced != token) M.changesMade = true;
+                                return replaced;
+                            });
+
+                            stringArg = updated;
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            foreach (Match m in Regex.Matches(stringArg, @"(?i)System[\\/]+([^ \t\r\n/\\]+)"))
+                            {
+                                string name = m.Groups[1].Value;
+                                if (!string.IsNullOrEmpty(name))
+                                    M.checkStringValidForMode(name, M.M_SYSTEM);
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // Maniacs 3030/3031: Script lines — 可能直接出现 System/<name> 引用
+                try
+                {
+                    if ((opcode == C_MANIACS3030 || opcode == C_MANIACS3031) && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            string updated = Regex.Replace(stringArg, @"(?i)System/([^ \t\r\n/\\]+)", match =>
+                            {
+                                string baseName = match.Groups[1].Value;
+                                string replaced = ReplaceSystemBaseName(baseName);
+                                if (replaced != baseName)
+                                    M.changesMade = true;
+                                return "System/" + replaced;
+                            });
+                            if (!ReferenceEquals(updated, stringArg))
+                                stringArg = updated;
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            foreach (Match m in Regex.Matches(stringArg, @"(?i)System/([^ \t\r\n/\\]+)"))
+                            {
+                                string name = m.Groups[1].Value;
+                                if (!string.IsNullOrEmpty(name))
+                                    M.checkStringValidForMode(name, M.M_SYSTEM);
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // Generic fallback for System filenames: if still non-ASCII and no mapping applied, map to uXXXX form when a matching file exists.
+                try
+                {
+                    if (mode == M.M_SYSTEM && !string.IsNullOrEmpty(stringArg)
+                        && (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings)))
+                    {
+                        string sysName = Path.GetFileName(stringArg.Trim());
+                        bool hasNonAscii = false;
+                        foreach (char c in sysName) { if (c > 0x7F) { hasNonAscii = true; break; } }
+                        if (hasNonAscii)
+                        {
+                            string asciiCandidate = buildAsciiUEscapedName(sysName);
+                            try
+                            {
+                                string sysDir = M.gamePath + "\\" + M.FOLDER[M.M_SYSTEM];
+                                if (Directory.Exists(sysDir))
+                                {
+                                    DirectoryInfo root = new DirectoryInfo(sysDir);
+                                    if (root.GetFiles(asciiCandidate + ".*").Length > 0)
+                                    {
+                                        stringArg = asciiCandidate;
+                                        M.changesMade = true;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
             }
             else
             {
@@ -3922,6 +4152,47 @@ namespace RPGRewriter
         public bool isBlank()
         {
             return opcode == C_BLANK;
+        }
+
+        // 将字符串中的非ASCII字符转换为 uXXXX 形式，保留ASCII字符不变。
+        // 用于尝试匹配磁盘上可能已存在的“ASCII转义”系统文件名（例如：戦闘 -> u6226u95d8）。
+        static string buildAsciiUEscapedName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in name)
+            {
+                if (c <= 0x7F)
+                    sb.Append(c);
+                else
+                    sb.Append('u').Append(((int)c).ToString("x4"));
+            }
+            return sb.ToString();
+        }
+
+        // Helper: perform System filename replacement using mapping or on-disk ascii-escaped fallback.
+        static string ReplaceSystemBaseName(string baseName)
+        {
+            string name = Path.GetFileName(baseName.Trim());
+            if (string.IsNullOrEmpty(name)) return baseName;
+            string replaced = M.rewriteString(M.M_SYSTEM, name);
+            if (replaced == name)
+            {
+                // Try ascii-escaped fallback if such a file exists physically
+                string asciiCandidate = buildAsciiUEscapedName(name);
+                try
+                {
+                    string sysDir = M.gamePath + "\\" + M.FOLDER[M.M_SYSTEM];
+                    if (Directory.Exists(sysDir))
+                    {
+                        DirectoryInfo root = new DirectoryInfo(sysDir);
+                        if (root.GetFiles(asciiCandidate + ".*").Length > 0)
+                            replaced = asciiCandidate;
+                    }
+                }
+                catch { }
+            }
+            return replaced;
         }
 
         // 安全地访问args数组，如果索引越界返回默认值
