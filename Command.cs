@@ -2,6 +2,7 @@
 using System.Text;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Collections.Generic;
 
 namespace RPGRewriter
 {
@@ -3914,13 +3915,85 @@ namespace RPGRewriter
         {
             if (opcode == C_SHOWSTRINGPICTURE) // Account for unique formatting
             {
-                if (stringArg[0] == (char)0x01) // Only set if "true" string starts with 0x01, indicating string constant, and keep the other parts the same
+                if (stringArg.Length > 0 && stringArg[0] == (char)0x01)
                 {
-                    string[] strParts = stringArg.Split((char)0x01);
-                    strParts[1] = str.Replace("\r\n", "\n");
-                    str = "";
-                    for (int i = 1; i < strParts.Length; i++)
-                        str += (char)0x01 + strParts[i];
+                    // Maniacs StringPicture can contain multiple text lines as multiple 0x01-delimited parts
+                    // before the trailing font and System filename parts. Convert incoming multi-line text
+                    // into multiple parts while preserving existing font/System segments and any tail options.
+                    string incoming = (str ?? string.Empty).Replace("\r\n", "\n");
+
+                    string[] parts = stringArg.Substring(1).Split((char)0x01);
+
+                    // Find probable System filename index scanning from the end using heuristics
+                    int sysIndex = -1;
+                    try
+                    {
+                        for (int k = parts.Length - 1; k >= 0; k--)
+                        {
+                            string cand = parts[k].Trim();
+                            if (string.IsNullOrEmpty(cand)) continue;
+                            bool startsWithSystem = cand.StartsWith("System", StringComparison.OrdinalIgnoreCase)
+                                                    || cand.StartsWith("System2", StringComparison.OrdinalIgnoreCase);
+                            bool asciiHit = false;
+                            try
+                            {
+                                string asciiCandidate = buildAsciiUEscapedName(Path.GetFileName(cand));
+                                string sysDir = M.gamePath + "\\" + M.FOLDER[M.M_SYSTEM];
+                                if (Directory.Exists(sysDir))
+                                {
+                                    DirectoryInfo root = new DirectoryInfo(sysDir);
+                                    asciiHit = root.GetFiles(asciiCandidate + ".*").Length > 0;
+                                }
+                            }
+                            catch { asciiHit = false; }
+                            bool hasMapping = false;
+                            try { hasMapping = M.rewriteString(M.M_SYSTEM, cand) != cand; } catch { }
+                            if (startsWithSystem || asciiHit || hasMapping)
+                            { sysIndex = k; break; }
+                        }
+                    }
+                    catch { sysIndex = -1; }
+
+                    // If a System part was found and there is at least one preceding part, rebuild parts as:
+                    //  [text line 1]...[text line N] + [font (kept)] + [System (kept)] + [tail]
+                    if (sysIndex > 0)
+                    {
+                        // Assume the part immediately before System is the font (observed format)
+                        string fontPart = parts[sysIndex - 1];
+                        // Any parts after System should be preserved verbatim
+                        List<string> tail = new List<string>();
+                        for (int t = sysIndex + 1; t < parts.Length; t++) tail.Add(parts[t]);
+
+                        // Split incoming into lines and rebuild
+                        string[] lines = incoming.Split('\n');
+                        List<string> newParts = new List<string>(lines);
+                        newParts.Add(fontPart);
+                        newParts.Add(parts[sysIndex]); // System
+                        newParts.AddRange(tail);
+
+                        str = ((char)0x01).ToString() + string.Join(((char)0x01).ToString(), newParts);
+                    }
+                    else
+                    {
+                        // Fallback: keep original format, just replace the first text segment
+                        string[] strParts = stringArg.Split((char)0x01);
+                        if (strParts.Length > 1)
+                        {
+                            strParts[1] = incoming; // only the first text field
+                            StringBuilder sb = new StringBuilder();
+                            for (int i = 1; i < strParts.Length; i++)
+                            {
+                                sb.Append((char)0x01);
+                                sb.Append(strParts[i]);
+                            }
+                            str = sb.ToString();
+                        }
+                        else
+                        {
+                            // Should not happen, but avoid changing format silently
+                            return false;
+                        }
+                    }
                 }
                 else // For other types, don't make any changes
                     return false;
@@ -4039,9 +4112,72 @@ namespace RPGRewriter
             string returnString = stringArg;
             if (opcode == C_SHOWSTRINGPICTURE) // Account for unique formatting
             {
-                returnString = "";
-                if (stringArg[0] == (char)0x01)
-                    returnString = stringArg.Substring(1).Split((char)0x01)[0];
+                if (!string.IsNullOrEmpty(stringArg) && stringArg[0] == (char)0x01)
+                {
+                    try
+                    {
+                        // Split into 0x01 parts; gather all text parts before the trailing font/System parts.
+                        string[] parts = stringArg.Substring(1).Split((char)0x01);
+
+                        // Find probable System filename index
+                        int sysIndex = -1;
+                        for (int k = parts.Length - 1; k >= 0; k--)
+                        {
+                            string cand = parts[k].Trim();
+                            if (string.IsNullOrEmpty(cand)) continue;
+                            bool hint = false;
+                            if (cand.StartsWith("System", StringComparison.OrdinalIgnoreCase)
+                             || cand.StartsWith("System2", StringComparison.OrdinalIgnoreCase))
+                                hint = true;
+                            if (!hint)
+                            {
+                                try
+                                {
+                                    string asciiCandidate = buildAsciiUEscapedName(Path.GetFileName(cand));
+                                    string sysDir = M.gamePath + "\\" + M.FOLDER[M.M_SYSTEM];
+                                    if (Directory.Exists(sysDir))
+                                    {
+                                        DirectoryInfo root = new DirectoryInfo(sysDir);
+                                        hint = root.GetFiles(asciiCandidate + ".*").Length > 0;
+                                    }
+                                }
+                                catch { hint = false; }
+                            }
+                            if (!hint)
+                            {
+                                try { hint = M.rewriteString(M.M_SYSTEM, cand) != cand; } catch { hint = false; }
+                            }
+                            if (hint) { sysIndex = k; break; }
+                        }
+
+                        if (sysIndex > 0)
+                        {
+                            // Join all parts before font (which we assume is parts[sysIndex-1])
+                            int lastTextIndex = sysIndex - 2; // text up to element before font
+                            if (lastTextIndex < 0) lastTextIndex = 0; // safety
+                            StringBuilder sb = new StringBuilder();
+                            for (int i = 0; i <= lastTextIndex && i < parts.Length; i++)
+                            {
+                                if (i > 0) sb.Append('\n');
+                                sb.Append(parts[i]);
+                            }
+                            returnString = sb.ToString();
+                        }
+                        else
+                        {
+                            // Fallback: treat the very first part as the text
+                            returnString = parts.Length > 0 ? parts[0] : string.Empty;
+                        }
+                    }
+                    catch
+                    {
+                        returnString = string.Empty;
+                    }
+                }
+                else
+                {
+                    returnString = stringArg; // non-standard fallback
+                }
             }
             return returnString;
         }
