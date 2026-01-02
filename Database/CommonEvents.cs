@@ -171,7 +171,12 @@ namespace RPGRewriter
                 
                 bool lastLineOfMessage = false;
                 if (M.stringScriptExportMode && i + 1 < commands.Count)
-                    lastLineOfMessage = !commands[i + 1].isMessageFollowOrExtraBox();
+                {
+                    int next = i + 1;
+                    while (next < commands.Count && commands[next].isManiacsNoOp())
+                        next++;
+                    lastLineOfMessage = next >= commands.Count || !commands[next].isMessageFollowOrExtraBox();
+                }
                 
                 string commandText = commands[i].getString(lastLineOfMessage);
                 if (commandText != "")

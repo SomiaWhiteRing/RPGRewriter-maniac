@@ -1,6 +1,7 @@
-﻿using System;
+﻿﻿using System;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Windows.Forms;
 using Newtonsoft.Json;
@@ -263,6 +264,8 @@ namespace RPGRewriter
         [STAThread]
         static void Main(string[] args)
         {
+            try
+            {
             Console.Title = "RM2K Translation Assistant";
             
             UNICODE = Encoding.UTF8;
@@ -273,10 +276,10 @@ namespace RPGRewriter
             writeEncodingIDs = new int[4];
             for (int i = 0; i < 4; i++)
             {
-                readEncodings[S_CONSTANT] = Encoding.GetEncoding(932);
-                readEncodingIDs[S_CONSTANT] = 932;
-                writeEncodings[S_CONSTANT] = Encoding.GetEncoding(932);
-                writeEncodingIDs[S_CONSTANT] = 932;
+                readEncodings[i] = Encoding.GetEncoding(932);
+                readEncodingIDs[i] = 932;
+                writeEncodings[i] = Encoding.GetEncoding(932);
+                writeEncodingIDs[i] = 932;
             }
             
             loadUserSettings(true);
@@ -845,6 +848,20 @@ namespace RPGRewriter
                 
                 if (commandLineMode)
                     menuShow = false;
+            }
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    string log = "Unhandled exception\n" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "\n" + ex.ToString();
+                    File.WriteAllText("error.log", log, Encoding.UTF8);
+                    Console.Error.WriteLine("Unexpected error occurred. See error.log for details.");
+                }
+                catch
+                {
+                    Console.Error.WriteLine("Unexpected error occurred and logging failed.");
+                }
             }
         }
         
@@ -1776,6 +1793,9 @@ namespace RPGRewriter
                                || line.ToLower().Contains("#titlechange#")
                                || line.ToLower().Contains("#namefork#")
                                || line.ToLower().Contains("#stringpicture#")
+                               || line.ToLower().Contains("#maniacscallcommand#")
+                               || line.ToLower().Contains("#maniacsscript#")
+                               || line.ToLower().Contains("#maniacsstringvariable#")
                                || line.ToLower().Contains("#eventname#")
                                || line.ToLower().Contains("#commoneventname#")
                                || line.ToLower().Contains("#troopname#")))
@@ -1796,6 +1816,12 @@ namespace RPGRewriter
                                 commandName = "NameFork";
                             else if (line.ToLower().Contains("#stringpicture#"))
                                 commandName = "StringPicture";
+                            else if (line.ToLower().Contains("#maniacscallcommand#"))
+                                commandName = "ManiacsCallCommand";
+                            else if (line.ToLower().Contains("#maniacsscript#"))
+                                commandName = "ManiacsScript";
+                            else if (line.ToLower().Contains("#maniacsstringvariable#"))
+                                commandName = "ManiacsStringVariable";
                             else if (line.ToLower().Contains("#eventname#"))
                                 commandName = "eventname"; // Lowercase since it uses database-style approach
                             else if (line.ToLower().Contains("#commoneventname#"))
@@ -2249,6 +2275,9 @@ namespace RPGRewriter
                 detailSettings = new List<string>();
             if (extraneousSettings == null)
                 extraneousSettings = new List<string>();
+            // 尝试强制导出脸图变更信息
+            if (!detailSettings.Contains("CommandMessageFace"))
+                detailSettings.Add("CommandMessageFace");
             
             // True user preferences.
             userSettings["CommandIndents"] = 0;
@@ -2257,7 +2286,7 @@ namespace RPGRewriter
             userSettings["WrapStyle"] = 1;
             userSettingsStr["LogFilename"] = "log";
             userSettings["SuperVerboseStrings"] = 0;
-            userSettings["StringScriptDetails"] = 0;
+            userSettings["StringScriptDetails"] = 1;
             userSettings["StringScriptExtraneous"] = 0;
             userSettings["IgnoreLengthLimits"] = 0;
             userSettings["ForceEngineVersion"] = 0;
@@ -2361,7 +2390,7 @@ namespace RPGRewriter
             validateUserSetting("WrapStyle", 1, 2, 1);
             validateUserSettingFilename("LogFilename", "log");
             validateUserSetting("SuperVerboseStrings", 0, 1, 0);
-            validateUserSetting("StringScriptDetails", 0, 1, 0);
+            validateUserSetting("StringScriptDetails", 0, 1, 1);
             validateUserSetting("StringScriptExtraneous", 0, 1, 0);
             validateUserSetting("IgnoreLengthLimits", 0, 2, 0);
             validateUserSetting("ForceEngineVersion", 0, 3, 0);
@@ -2524,8 +2553,8 @@ namespace RPGRewriter
             catch (Exception)
             {
                 Console.WriteLine(num + " is not a valid codepage number. Defaulting to Shift-JIS.");
-                readEncodings[strType] = Encoding.GetEncoding(932);
-                readEncodingIDs[strType] = 932;
+                writeEncodings[strType] = Encoding.GetEncoding(932);
+                writeEncodingIDs[strType] = 932;
                 enterToContinue();
             }
         }
@@ -3519,6 +3548,94 @@ namespace RPGRewriter
             }
             return list;
         }
+
+        // New helper method to find the start of the next event
+        public static bool TrySkipToNextEventStart(FileStream f, int failedEventIndex, int totalEvents, long endOfEventChunkPos)
+        {
+            int nextEventNum = failedEventIndex + 2; // Event numbers are 1-based, index is 0-based
+            if (nextEventNum > totalEvents)
+            {
+                // There is no next event, we were processing the last one. Just go to the end.
+                f.Position = endOfEventChunkPos;
+                return true;
+            }
+
+            byte[] expectedBytes = getMultibytesForValue(nextEventNum);
+            long currentPos = f.Position;
+            logMessage($"Attempting recovery: Seeking start of Event {nextEventNum} (bytes: {BitConverter.ToString(expectedBytes).Replace("-", " ")}) from offset {hexParen(currentPos)}...");
+
+            while (currentPos < endOfEventChunkPos)
+            {
+                f.Position = currentPos; // Set position for reading
+                
+                // Try to read the potential multibyte for the next event number
+                long potentialStartPos = currentPos;
+                int bytesReadCount;
+                
+                try 
+                {
+                    // Need a way to read multibyte *without* advancing if it's short
+                    // Or, more simply, check the first byte
+                    byte firstByte = (byte)f.ReadByte();
+                    f.Position = potentialStartPos; // Reset position
+                    bytesReadCount = countMultibyte(firstByte < 128 ? firstByte : -1); // Estimate initial bytes needed
+
+                    // This is still tricky. A robust multibyte *peek* is needed, or byte-by-byte match.
+                    // Let's try a simpler byte-by-byte match for now.
+                    
+                    bool match = true;
+                    for(int i=0; i<expectedBytes.Length; ++i)
+                    {
+                        if (currentPos + i >= endOfEventChunkPos) {
+                            match = false;
+                            break;
+                        }
+                        f.Position = currentPos + i;
+                        if ((byte)f.ReadByte() != expectedBytes[i]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    f.Position = currentPos; // Reset after peeking/checking
+
+                    if (match) 
+                    {
+                        // Found a potential match for the event number bytes
+                        // Optional: Add heuristic check (e.g., is the byte AFTER the number a valid chunk ID like 0x01 or 0x02?)
+                        f.Position = currentPos + expectedBytes.Length; 
+                        if (f.Position < endOfEventChunkPos) {
+                            byte nextChunkId = (byte)f.ReadByte();
+                            // Check if it's a plausible start chunk ID for an event
+                            if (nextChunkId == 0x01 || nextChunkId == 0x02 || nextChunkId == 0x03 || nextChunkId == 0x05 || nextChunkId == 0x00) 
+                            {
+                                    // Seems plausible. Reset position to the start of the found event number.
+                                    f.Position = potentialStartPos; 
+                                    logMessage($"Recovery successful: Found Event {nextEventNum} start at {hexParen(f.Position)}.");
+                                    return true;
+                            }
+                        }
+                        // If check failed or at end of chunk, reset position and continue scanning
+                        f.Position = currentPos; 
+                    }
+                }
+                catch (EndOfStreamException)
+                {
+                    // Reached EOF unexpectedly while trying to read/check
+                    break;
+                }
+                catch (Exception ex) 
+                {
+                    // Other reading errors during recovery attempt
+                    logMessage($"Error during recovery scan at {hexParen(currentPos)}: {ex.Message}");
+                    // Depending on the error, might want to break or just advance
+                }
+
+                currentPos++; // Advance scan position by one byte
+            }
+
+            logMessage($"Recovery failed: Could not find start of Event {nextEventNum} before end of chunk ({hexParen(endOfEventChunkPos)}).");
+            return false;
+        }
         
         // Reads a count, then a list of one-byte objects.
         public static List<T> readListNoLength<T>(FileStream f) where T : RPGData, new()
@@ -3612,10 +3729,19 @@ namespace RPGRewriter
             byte bRead = readByte(f);
             if (b != bRead)
             {
-                Console.WriteLine("Warning! A byte check failed.\n"
-                                + "(At position " + hexParen(f.Position - 1) + ", read " + hexParen(bRead, 2) + ", should be " + hexParen(b, 2) + ".)\n"
-                                + "Possible corrupt file or program bug.");
-                throw new Exception();
+                string pos = hexParen(f.Position - 1);
+                string message =
+                    "Byte check failed at " + pos
+                    + " (read " + hexParen(bRead, 2) + ", expected " + hexParen(b, 2) + ").\n"
+                    + "Context: File=" + currentFile
+                    + ", Event=" + currentEvent
+                    + (currentEventNum != 0 ? (" #" + currentEventNum) : "")
+                    + (currentPageNum != 0 ? (", Page " + currentPageNum) : "")
+                    + (currentLine != "" ? (", Line=" + currentLine) : "")
+                    + ".";
+                
+                Console.WriteLine("Warning! " + message);
+                throw new Exception(message);
             }
         }
         
@@ -3678,8 +3804,8 @@ namespace RPGRewriter
         public static byte[] skipChunkRange(FileStream f, byte start, byte end)
         {
             List<byte> bytesRead = new List<byte>();
-            for (byte i = start; i <= end; i++)
-                bytesRead.AddRange(skipChunk(f, i));
+            for (int i = start; i <= end; i++)
+                bytesRead.AddRange(skipChunk(f, (byte)i));
             return bytesRead.ToArray();
         }
         
@@ -4552,6 +4678,7 @@ namespace RPGRewriter
         {
             currentPage = "Page " + pageNum;
             currentPageNum = pageNum;
+            M.messageFaceOn = false; // Reset face state for each new page processing.
             
             if (importingStringArgs == null)
                 return;
@@ -4564,7 +4691,8 @@ namespace RPGRewriter
                 command.updateMessageFaceOn();
                 
                 if (command.isMessageStart() || command.isChoice()
-                 || command.isNameChange() || command.isTitleChange() || command.isNameFork() || command.isStringPicture())
+                 || command.isNameChange() || command.isTitleChange() || command.isNameFork() || command.isStringPicture()
+                 || command.isManiacsCallCommand() || command.isManiacsStringVariable() || command.isManiacsScriptLine())
                 {
                     if (importingStringArgs.ContainsKey(currentEventNum))
                     {
@@ -4578,6 +4706,9 @@ namespace RPGRewriter
                                                 : command.isTitleChange()? "TitleChange"
                                                 : command.isNameFork()? "NameFork"
                                                 : command.isStringPicture()? "StringPicture"
+                                                : command.isManiacsCallCommand()? "ManiacsCallCommand"
+                                                : command.isManiacsStringVariable()? "ManiacsStringVariable"
+                                                : command.isManiacsScriptLine()? "ManiacsScript"
                                                 : "";
                             
                             if (importingStringArgs[currentEventNum][currentPageNum].ContainsKey(commandShort))
@@ -4687,7 +4818,8 @@ namespace RPGRewriter
                                             Console.WriteLine(localStr + ": Choice count does not match.");
                                     }
                                     else if (command.isNameChange() || command.isTitleChange()
-                                          || command.isNameFork() || command.isStringPicture()) // Just replace string, easy
+                                          || command.isNameFork() || command.isStringPicture()
+                                          || command.isManiacsCallCommand() || command.isManiacsStringVariable() || command.isManiacsScriptLine()) // Just replace string, easy
                                     {
                                         if (command.setStringArg(importArg))
                                             changesMade = true;
@@ -4818,83 +4950,127 @@ namespace RPGRewriter
         }
         
         // Gets byte length of string (using "to translate" write encoding), relevant for character limits.
+        private static readonly Regex styleCodeRegex = new Regex(@"\\[^\\]\[[^\]]*\]|\\[^\\]", RegexOptions.Compiled);
+        
         public static int stringByteLength(string str)
         {
-            return writeEncodings[S_TOTRANSLATE].GetBytes(str).Length;
+            // 计算字符长度的时候，要剥离所有如\!或\c[0]一类的样式代码
+            string cleanedString = styleCodeRegex.Replace(str, string.Empty);
+            return writeEncodings[S_TOTRANSLATE].GetBytes(cleanedString).Length;
         }
         
         // Wraps overflowing lines in a message according to word wrap settings.
         public static string wordWrap(string str)
         {
-            if (userSettings["WordWrap"] == 0)
-                return str;
-            
-            bool fullBox = userSettings["WrapLineLimits"] == 2 || (userSettings["WrapLineLimits"] == 1 && !messageFaceOn);
-            bool faceBox = userSettings["WrapLineLimits"] == 3 || (userSettings["WrapLineLimits"] == 1 && messageFaceOn);
-            bool wrapImmediately = userSettings["WrapStyle"] == 2;
-            
-            int limit = fullBox? 50 : 38;
-            string[] lines = str.Split('\n');
+            // --- 新增：定义可换行的标点符号集合 ---
+            // 包括常见的中文全角标点和半角空格
+            var lineBreakChars = new HashSet<char> {
+                '，', // 全角逗号
+                '。', // 全角句号
+                '；', // 全角分号
+                '：', // 全角冒号
+                '？', // 全角问号
+                '！', // 全角感叹号
+                '、', // 顿号
+                ' ',  // 半角空格
+                // 可以根据需要添加更多，例如 ）】》”』 等右括号/引号
+            };
+            // --- 结束新增 ---
+
+            // 保留原有的逻辑获取限制 (limit)
+            bool fullBox = !messageFaceOn;
+            bool faceBox = messageFaceOn;
+            int limit = fullBox ? 50 : 38; // 这里的限制仍然是 *字节* 限制
+
+            // --- 修改后的换行处理逻辑 ---
+            string[] originalLines = str.Split('\n');
             List<string> newLines = new List<string>();
-            
-            for (int i = 0; i < lines.Length; i++)
+
+            foreach (string originalLine in originalLines)
             {
-                string line = lines[i];
-                
-                if (stringByteLength(line) > limit)
+                string currentSegment = originalLine;
+
+                // 使用 while 循环处理一个原始行可能需要分成多行的情况
+                while (stringByteLength(currentSegment) > limit)
                 {
-                    // In immediate mode, wrap no later than the last possible character.
-                    // In even mode, wrap no later than the average of the total character length.
-                    int breakCount = 1, maxBreak = 0;
-                    if (wrapImmediately)
-                        maxBreak = limit;
-                    else
+                    int breakIndex = -1; // 找到的最佳换行索引 (字符索引)
+                    bool breakFound = false;
+
+                    // 尝试在合理范围内寻找标点或空格
+                    // 从接近字节限制的字符位置开始向前查找
+                    // 注意：这里只是一个估算，因为字符和字节不一一对应
+                    // 我们从最后一个可能符合条件的字符开始向前找
+                    int searchStart = Math.Min(currentSegment.Length - 1, limit); // 从最多'limit'个字符处开始往前找
+
+                    for (int j = searchStart; j > 0; j--)
                     {
-                        maxBreak = line.Length / 2;
-                        if (maxBreak > limit)
+                        // 检查当前字符是否是允许的换行字符
+                        if (lineBreakChars.Contains(currentSegment[j]))
                         {
-                            maxBreak = line.Length / 3;
-                            breakCount = 2;
-                        }
-                        if (maxBreak > limit)
-                        {
-                            maxBreak = line.Length / 4;
-                            breakCount = 3;
+                            // 找到了一个潜在的换行点
+                            // 验证换行后的第一部分是否真的不超过字节限制
+                            string potentialFirstPart = currentSegment.Substring(0, j + 1); // 包含标点符号本身
+                            if (stringByteLength(potentialFirstPart) <= limit)
+                            {
+                                // 找到了一个有效的换行点
+                                breakIndex = j;
+                                breakFound = true;
+                                break; // 找到最靠右的有效换行点，停止内层循环
+                            }
+                            // 如果包含标点后仍超长，继续往前找更早的标点
                         }
                     }
-                    
-                    do
+
+                    // 如果找到了合适的标点/空格换行点
+                    if (breakFound)
                     {
-                        for (int j = maxBreak; j > 0; j--)
+                        newLines.Add(currentSegment.Substring(0, breakIndex + 1));
+                        currentSegment = currentSegment.Substring(breakIndex + 1);
+                    }
+                    // 如果没有找到标点/空格换行点，则执行强制换行
+                    else
+                    {
+                        int forceBreakIndex = -1;
+                        // 从头开始，找到第一个使得子串字节超限的位置
+                        for (int k = 1; k < currentSegment.Length; k++)
                         {
-                            if (j >= line.Length)
-                                continue;
-                            
-                            if (line[j] == ' ')
+                            if (stringByteLength(currentSegment.Substring(0, k + 1)) > limit)
                             {
-                                string firstLine = line.Substring(0, j);
-                                newLines.Add(firstLine);
-                                line = line.Substring(j + 1);
-                                
-                                // In immediate mode, force another loop if length still goes over.
-                                if (wrapImmediately && stringByteLength(line) > limit)
-                                    breakCount = 2;
+                                forceBreakIndex = k; // 在第 k 个字符后换行
                                 break;
                             }
                         }
-                        breakCount--;
-                    } while (breakCount > 0);
+
+                        // 如果找到了强制换行点
+                        if (forceBreakIndex > 0)
+                        {
+                            newLines.Add(currentSegment.Substring(0, forceBreakIndex));
+                            currentSegment = currentSegment.Substring(forceBreakIndex);
+                        }
+                        // 极端情况：连第一个字符都放不下，或者整行都没超（理论上不会进入while）
+                        // 为了防止死循环，直接添加剩余部分，虽然它会超长
+                        else
+                        {
+                            // if (!string.IsNullOrEmpty(currentSegment)) // 避免添加空行
+                            // {
+                            newLines.Add(currentSegment);
+                            Console.WriteLine($"Warning: Could not effectively wrap line segment within byte limit ({limit}): {currentSegment}");
+                            // }
+                            currentSegment = ""; // 清空，结束 while 循环
+                        }
+                    }
                 }
-                
-                // Add either the line that was already under limit, or the remaining broken-off line.
-                newLines.Add(line);
+
+                // 将处理完（或从未超长）的最后一段/原始段添加到结果列表
+                // if (!string.IsNullOrEmpty(currentSegment))
+                // {
+                newLines.Add(currentSegment);
+                // }
             }
-            
-            str = "";
-            for (int i = 0; i < newLines.Count; i++)
-                str += newLines[i] + (i < newLines.Count - 1? "\n" : "");
-            
-            return str;
+
+            // 使用换行符重新组合所有行
+            return string.Join("\n", newLines);
+            // --- 结束修改 ---
         }
         
         // Adds a message to the log.

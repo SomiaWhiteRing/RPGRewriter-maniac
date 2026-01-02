@@ -454,17 +454,24 @@ namespace RPGRewriter
             
             if (!M.readingDataNames)
             {
-                str = new string[255];
+                // Some projects include additional vocab entries beyond 0x99 (e.g., 0xA1+),
+                // so allocate the full byte range.
+                str = new string[256];
                 
-                for (byte i = 0x01; i <= 0x99; i++)
-                    if (chunks.next(i))
-                        str[i] = M.readString(f, M.S_TOTRANSLATE);
+                // Some projects include additional vocab entries beyond 0x99 (e.g., 0xA1+).
+                // Read the full byte range to avoid leaving unparsed chunks before the 0x00 terminator.
+                for (int i = 0x01; i <= 0xff; i++)
+                {
+                    byte chunkId = (byte)i;
+                    if (chunks.next(chunkId))
+                        str[chunkId] = M.readString(f, M.S_TOTRANSLATE);
+                }
                 
                 M.byteCheck(f, 0x00);
             }
             else // Skip everything.
             {
-                M.skipChunkRange(f, 0x01, 0x99);
+                M.skipChunkRange(f, 0x01, 0xff);
                 M.byteCheck(f, 0x00);
             }
         }
@@ -612,6 +619,22 @@ namespace RPGRewriter
         {
             if (refName == null)
                 initStatic();
+                
+            // 确保str数组已经被初始化
+            if (str == null)
+            {
+                str = new string[256];
+                for (int i = 0; i < str.Length; i++)
+                {
+                    str[i] = "";
+                }
+            }
+            
+            // 确保chunks对象已经被初始化
+            if (chunks == null)
+            {
+                chunks = new Chunks();
+            }
             
             int tabNum = 0x15;
             
@@ -629,9 +652,12 @@ namespace RPGRewriter
         // Writes data.
         override protected void myWrite()
         {
-            for (byte i = 0x01; i <= 0x99; i++)
-                if (chunks.wasNext(i))
-                    M.writeString(str[i], M.S_TOTRANSLATE);
+            for (int i = 0x01; i <= 0xff; i++)
+            {
+                byte chunkId = (byte)i;
+                if (chunks.wasNext(chunkId))
+                    M.writeString(str[chunkId], M.S_TOTRANSLATE);
+            }
             
             M.writeByte(0x00);
             

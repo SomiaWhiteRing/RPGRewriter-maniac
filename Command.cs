@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Text;
 using System.IO;
+using System.Text.RegularExpressions;
+using System.Collections.Generic;
 
 namespace RPGRewriter
 {
@@ -12,6 +14,10 @@ namespace RPGRewriter
         int[] args;
         string[] trueChoices;
         
+        long debugCommandStartPos = -1;
+        long debugAfterHeaderPos = -1;
+        string debugNextBytes = "";
+        
         int moveRouteTarget;
         int moveRouteFreq;
         bool moveRouteRepeat;
@@ -21,6 +27,8 @@ namespace RPGRewriter
         #region // Command Codes //
         
         public const int C_BLANK = 10;
+        // Observed in Maniacs-patched projects: opcode 40 appears as a no-op placeholder (stringArg is a single NUL, argCount = 0).
+        public const int C_MANIACS_NOP = 40;
         public const int C_BATTLECALLEVENT = 1005;
         public const int C_FORCEFLEE = 1006;
         public const int C_ENABLECOMBO = 1007;
@@ -36,6 +44,24 @@ namespace RPGRewriter
         public const int C_MANIACS3021 = 3021;
         public const int C_MANIACS3025 = 3025;
         public const int C_MANIACS3026 = 3026;
+        public const int C_MANIACS3002 = 3002; // セーブの実行 (Execute Save)
+        public const int C_MANIACS3004 = 3004; // ロード処理の終了 (End Load Processing)
+        public const int C_MANIACS3006 = 3006; // マウス座標の設定 (Set Mouse Coordinates)
+        public const int C_MANIACS3009 = 3009; // 戦闘処理の制御 (Control Battle Processing)
+        public const int C_MANIACS3010 = 3010; // ATBゲージの操作 (Operate ATB Gauge)
+        public const int C_MANIACS3011 = 3011; // 戦闘コマンドの変更EX (Change Battle Command EX)
+        public const int C_MANIACS3012 = 3012; // 戦闘情報の取得 (Get Battle Information)
+        public const int C_MANIACS3015 = 3015; // マップの書き換え (Rewrite Map)
+        public const int C_MANIACS3017 = 3017; // ピクチャのID変更 (Change Picture ID)
+        public const int C_MANIACS3019 = 3019; // コマンドの呼び出し (Call Command)
+        public const int C_MANIACS3020 = 3020; // 文字列変数の操作 (Operate String Variables)
+        public const int C_MANIACS3027 = 3027; // キャラの動作追加 (Add Character Action)
+        public const int C_MANIACS3028 = 3028; // ピクチャ編集(チップ) (Picture Edit (Chip))
+        public const int C_MANIACS3029 = 3029; // 文章処理の制御 (Control Text Processing)
+        public const int C_MANIACS3030 = 3030; // スクリプト(1行目) (Script (Line 1))
+        public const int C_MANIACS3031 = 3031; // スクリプト(2行目~) (Script (Line 2+))
+        public const int C_MANIACS3032 = 3032; // 画面のズーム (Screen Zoom)
+        public const int C_MANIACS3033 = 3033; // コンソール (Console)
         public const int C_CALLLOAD = 5001;
         public const int C_EXITGAME = 5002;
         public const int C_TOGGLEATBMODE = 5003;
@@ -160,6 +186,9 @@ namespace RPGRewriter
         public const int C_STOPBATTLE = 13410;
         
         public const int DUMMYMESSAGEARG = 1374;
+
+        public const int C_MANIACS3001 = 3001;
+        public const int C_MANIACS3003 = 3003;
         #endregion
         
         #region // String Constants //
@@ -186,6 +215,13 @@ namespace RPGRewriter
         static string[] classChangeSkills = { "Retain Skills", "Add New Skills Deleting Old", "Add New Skills Keeping Old" };
         static string[] classChangeStats = { "Retain Stats", "Halve Stats", "Set Stats to Level 1", "Set Stats Per New Class"};
         #endregion
+
+        // Safely get a label from an array; falls back to numeric code when out of range.
+        static string SafeLabel(string[] arr, int index)
+        {
+            if (arr == null) return "Unknown(" + index + ")";
+            return index >= 0 && index < arr.Length ? arr[index] : ("Unknown(" + index + ")");
+        }
         
         public Command(FileStream f)
         {
@@ -205,8 +241,32 @@ namespace RPGRewriter
         // Loads a single command within a page.
         override public void load(FileStream f)
         {
+            debugCommandStartPos = f.Position;
             opcode = M.readMultibyte(f);
             indent = M.readMultibyte(f);
+            debugAfterHeaderPos = f.Position;
+            debugNextBytes = "";
+            try
+            {
+                long previewPos = f.Position;
+                byte[] preview = new byte[48];
+                int bytesRead = f.Read(preview, 0, preview.Length);
+                f.Position = previewPos;
+                if (bytesRead > 0)
+                {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < bytesRead; i++)
+                    {
+                        if (i != 0) sb.Append(' ');
+                        sb.Append(M.hex(preview[i], 2));
+                    }
+                    debugNextBytes = sb.ToString();
+                }
+            }
+            catch
+            {
+                debugNextBytes = "";
+            }
             
             int mode = getMode();
             
@@ -218,6 +278,207 @@ namespace RPGRewriter
                 args = new int[argCount];
                 for (int i = 0; i < argCount; i++)
                     args[i] = M.readMultibyte(f);
+
+                // First pass: rewrite any embedded resource paths in all opcodes (handles ../CharSet/NAME, etc.)
+                try
+                {
+                    if (!string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            string rewritten = RewriteEmbeddedResourcePaths(stringArg);
+                            if (!ReferenceEquals(rewritten, stringArg) && rewritten != stringArg)
+                            {
+                                stringArg = rewritten;
+                                M.changesMade = true;
+                            }
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            RewriteEmbeddedResourcePaths(stringArg); // 内部触发检查
+                        }
+                    }
+                }
+                catch { }
+
+                // Special-case: Maniacs 2003 "Show String Picture" (3007)
+                // The stringArg layout is: 0x01 + [display text] + 0x01 + [font] + 0x01 + [system graphic filename]
+                // - In Rewriting mode: rewrite the embedded System filename segment using the normal replacement list.
+                //   If no replacement is found, try to auto-map to an existing ASCII-escaped filename in the System folder (e.g., System戦闘 -> Systemu6226u95d8).
+                // - In Checking mode: treat the embedded System filename as a file reference so missing ones are logged.
+                try
+                {
+                    if (opcode == C_SHOWSTRINGPICTURE && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (stringArg[0] == (char)0x01)
+                        {
+                            string[] parts = stringArg.Substring(1).Split((char)0x01);
+                            // parts[0] = display text; parts[1+] = font/system/others (顺序在不同工程可能不同)
+                            if (parts != null && parts.Length >= 2)
+                            {
+                                int sysIndex = -1;
+                                string sysDir = M.gamePath + "\\" + M.FOLDER[M.M_SYSTEM];
+                                DirectoryInfo root = Directory.Exists(sysDir)? new DirectoryInfo(sysDir) : null;
+
+                                // 选择最可能是系统图形名的字段：
+                                // 1) 以 "System"/"system" 开头；或 2) 含非ASCII且其 uXXXX 形式在磁盘存在；或 3) 映射表有替换。
+                                for (int k = 1; k < parts.Length; k++)
+                                {
+                                    string candRaw = parts[k].Trim();
+                                    if (string.IsNullOrEmpty(candRaw)) continue;
+                                    string cand = Path.GetFileName(candRaw);
+                                    bool startsWithSystem = cand.StartsWith("System") || cand.StartsWith("system");
+                                    bool nonAscii = false; foreach (char c in cand) { if (c > 0x7F) { nonAscii = true; break; } }
+                                    bool asciiHit = false;
+                                    if (nonAscii && root != null)
+                                    {
+                                        string asciiCandidate = buildAsciiUEscapedName(cand);
+                                        try { asciiHit = root.GetFiles(asciiCandidate + ".*").Length > 0; } catch { asciiHit = false; }
+                                    }
+                                    bool hasMapping = false;
+                                    try { hasMapping = M.rewriteString(M.M_SYSTEM, cand) != cand; } catch { }
+
+                                    if (startsWithSystem || asciiHit || hasMapping)
+                                    {
+                                        sysIndex = k; break;
+                                    }
+                                }
+
+                                if (sysIndex != -1)
+                                {
+                                    string systemNameOriginal = parts[sysIndex].Trim();
+                                    if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                                    {
+                                        string systemName = Path.GetFileName(systemNameOriginal);
+                                        if (!string.IsNullOrEmpty(systemName))
+                                        {
+                                            string replaced = ReplaceSystemBaseName(systemName);
+                                            if (replaced != systemName)
+                                            {
+                                                parts[sysIndex] = replaced;
+                                                stringArg = ((char)0x01).ToString() + string.Join(((char)0x01).ToString(), parts);
+                                                M.changesMade = true;
+                                            }
+                                        }
+                                    }
+
+                                    if (M.globalMode == "Checking")
+                                    {
+                                        string candidate = Path.GetFileName(systemNameOriginal);
+                                        if (!string.IsNullOrEmpty(candidate))
+                                            M.checkStringValidForMode(candidate, M.M_SYSTEM);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Swallow parsing errors; this is a best-effort checker and must not affect normal loading.
+                }
+
+                // Maniacs 3029: Control Text Processing — 有些工程在此内嵌资源路径（System/CharSet/…，可带 ../）
+                try
+                {
+                    if (opcode == C_MANIACS3029 && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            stringArg = RewriteEmbeddedResourcePaths(stringArg);
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            RewriteEmbeddedResourcePaths(stringArg); // 内部会调用 checkStringValidForMode
+                        }
+                    }
+                }
+                catch { }
+
+                // Maniacs 3019: Call Command — 有些工程把命令及其参数写在 stringArg，中可能直接出现资源路径引用
+                try
+                {
+                    if (opcode == C_MANIACS3019 && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            stringArg = RewriteEmbeddedResourcePaths(stringArg);
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            RewriteEmbeddedResourcePaths(stringArg);
+                        }
+                    }
+                }
+                catch { }
+
+                // Maniacs 3030/3031: Script lines — 可能直接出现资源路径引用
+                try
+                {
+                    if ((opcode == C_MANIACS3030 || opcode == C_MANIACS3031) && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            stringArg = RewriteEmbeddedResourcePaths(stringArg);
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            RewriteEmbeddedResourcePaths(stringArg);
+                        }
+                    }
+                }
+                catch { }
+
+                // Generic Maniacs fallback: rewrite any embedded resource paths in stringArg (e.g., ../CharSet/NAME)
+                try
+                {
+                    if (!string.IsNullOrEmpty(stringArg))
+                    {
+                        bool isManiacsOpcode = (opcode >= 3000 && opcode < 5100);
+                        if (isManiacsOpcode)
+                        {
+                            string rewritten = RewriteEmbeddedResourcePaths(stringArg);
+                            if (!ReferenceEquals(rewritten, stringArg) && rewritten != stringArg)
+                            {
+                                stringArg = rewritten;
+                                if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                                    M.changesMade = true;
+                            }
+                        }
+                    }
+                }
+                catch { }
+
+                // Generic fallback for System filenames: if still non-ASCII and no mapping applied, map to uXXXX form when a matching file exists.
+                try
+                {
+                    if (mode == M.M_SYSTEM && !string.IsNullOrEmpty(stringArg)
+                        && (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings)))
+                    {
+                        string sysName = Path.GetFileName(stringArg.Trim());
+                        bool hasNonAscii = false;
+                        foreach (char c in sysName) { if (c > 0x7F) { hasNonAscii = true; break; } }
+                        if (hasNonAscii)
+                        {
+                            string asciiCandidate = buildAsciiUEscapedName(sysName);
+                            try
+                            {
+                                string sysDir = M.gamePath + "\\" + M.FOLDER[M.M_SYSTEM];
+                                if (Directory.Exists(sysDir))
+                                {
+                                    DirectoryInfo root = new DirectoryInfo(sysDir);
+                                    if (root.GetFiles(asciiCandidate + ".*").Length > 0)
+                                    {
+                                        stringArg = asciiCandidate;
+                                        M.changesMade = true;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
             }
             else
             {
@@ -338,6 +599,8 @@ namespace RPGRewriter
             
             if (opcode == C_BLANK)
                 result = command10Blank();
+            else if (opcode == C_MANIACS_NOP)
+                result = command0040ManiacsNoOp();
             else if (opcode == C_BATTLECALLEVENT)
                 result = command1005BattleCallEvent();
             else if (opcode == C_FORCEFLEE)
@@ -354,6 +617,10 @@ namespace RPGRewriter
                 result = command3007ShowStringPicture();
             else if (opcode == C_MANIACS3008)
                 result = command3008ManiacsUnknown();
+            else if (opcode == C_MANIACS3001)
+                result = command3001ManiacsUnknown();
+            else if (opcode == C_MANIACS3003)
+                result = command3003ManiacsUnknown();
             else if (opcode == C_MANIACS3013)
                 result = command3013ManiacsUnknown();
             else if (opcode == C_MANIACS3014)
@@ -368,6 +635,43 @@ namespace RPGRewriter
                 result = command3025ManiacsUnknown();
             else if (opcode == C_MANIACS3026)
                 result = command3026ManiacsUnknown();
+            else if (opcode == C_MANIACS3002)
+                result = command3002ManiacsExecuteSave();
+            else if (opcode == C_MANIACS3004)
+                result = command3004ManiacsEndLoadProcessing();
+            else if (opcode == C_MANIACS3006)
+                result = command3006ManiacsSetMouseCoords();
+            else if (opcode == C_MANIACS3009)
+                result = command3009ManiacsControlBattleProcessing();
+            else if (opcode == C_MANIACS3010)
+                result = command3010ManiacsOperateATBGauge();
+            else if (opcode == C_MANIACS3011)
+                result = command3011ManiacsChangeBattleCommandEX();
+            else if (opcode == C_MANIACS3012)
+                result = command3012ManiacsGetBattleInfo();
+            else if (opcode == C_MANIACS3015)
+                result = command3015ManiacsRewriteMap();
+            else if (opcode == C_MANIACS3017)
+                result = command3017ManiacsChangePictureID();
+            else if (opcode == C_MANIACS3019)
+                result = command3019ManiacsCallCommand();
+            else if (opcode == C_MANIACS3020)
+                result = command3020ManiacsOperateStringVariables();
+            // 3021 已存在
+            else if (opcode == C_MANIACS3027)
+                result = command3027ManiacsAddCharacterAction();
+            else if (opcode == C_MANIACS3028)
+                result = command3028ManiacsPictureEditChip();
+            else if (opcode == C_MANIACS3029)
+                result = command3029ManiacsControlTextProcessing();
+            else if (opcode == C_MANIACS3030)
+                result = command3030ManiacsScriptLine1();
+            else if (opcode == C_MANIACS3031)
+                result = command3031ManiacsScriptLine2Plus();
+            else if (opcode == C_MANIACS3032)
+                result = command3032ManiacsScreenZoom();
+            else if (opcode == C_MANIACS3033)
+                result = command3033ManiacsConsole();
             else if (opcode == C_CALLLOAD)
                 result = command5001CallLoad();
             else if (opcode == C_EXITGAME)
@@ -612,9 +916,17 @@ namespace RPGRewriter
                 result = command23311BattleForkEnd();
             else if (opcode == C_STOPBATTLE)
                 result = command13410StopBattle();
+            else if (opcode == C_MANIACS3001)
+                result = command3001ManiacsUnknown();
+            else if (opcode == C_MANIACS3003)
+                result = command3003ManiacsUnknown();
             else if (opcode != 0)
             {
                 Console.WriteLine("UNSUPPORTED OPCODE " + opcode + " " + M.currentPosition());
+                if (debugCommandStartPos >= 0 && debugAfterHeaderPos >= 0)
+                    Console.WriteLine("Command stream position: start " + M.hexParen(debugCommandStartPos) + ", after header " + M.hexParen(debugAfterHeaderPos) + ".");
+                if (debugNextBytes != "")
+                    Console.WriteLine("Next bytes: " + debugNextBytes);
                 Console.WriteLine(stringArg);
                 for (int i = 0; i < args.Length; i++)
                     Console.WriteLine("args " + i + ": " + args[i]);
@@ -625,7 +937,7 @@ namespace RPGRewriter
             {
                 string commandName = "";
                 bool nameFork = isNameFork();
-                if (opcode == C_MESSAGE || isRemovedMessage())
+                if (opcode == C_MESSAGE || opcode == C_MESSAGEFOLLOW || isRemovedMessage())
                     commandName = "Message";
                 else if (opcode == C_CHOICE)
                     commandName = "Choice";
@@ -635,6 +947,12 @@ namespace RPGRewriter
                     commandName = "TitleChange";
                 else if (opcode == C_SHOWSTRINGPICTURE)
                     commandName = "StringPicture";
+                else if (isManiacsCallCommand())
+                    commandName = "ManiacsCallCommand";
+                else if (isManiacsStringVariable())
+                    commandName = "ManiacsStringVariable";
+                else if (isManiacsScriptLine())
+                    commandName = "ManiacsScript";
                 else if (nameFork)
                     commandName = "NameFork";
                 
@@ -703,6 +1021,19 @@ namespace RPGRewriter
                     if (M.getDetailSetting("OriginalCommandStrings"))
                         header = "//" + M.getOriginalString(commandName, exportStringArg).Replace("\n", "\n//") + lb + header;
                     else if (M.generatingOriginalStringDB) // Call method regardless to add string to database
+                        M.getOriginalString(commandName, exportStringArg);
+                    
+                    return header + exportStringArg + lb + terminator;
+                }
+                else if (isManiacsCallCommand() || isManiacsStringVariable() || isManiacsScriptLine())
+                {
+                    M.wroteStringInPage = true;
+                    
+                    string exportStringArg = getStringArg();
+                    
+                    if (M.getDetailSetting("OriginalCommandStrings"))
+                        header = "//" + M.getOriginalString(commandName, exportStringArg).Replace("\n", "\n//") + lb + header;
+                    else if (M.generatingOriginalStringDB)
                         M.getOriginalString(commandName, exportStringArg);
                     
                     return header + exportStringArg + lb + terminator;
@@ -959,16 +1290,26 @@ namespace RPGRewriter
         
         string command1005BattleCallEvent() // 87 6d
         {
-            int ev = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command1005BattleCallEvent: [Error: Invalid arguments]";
+            }
+            
+            int ev = SafeGetArg(0);
             
             return "Call Event: " + M.getDataCommon(ev);
         }
         
         string command1006ForceFlee() // 87 6e
         {
-            int scope = args[0];
-            int target = args[0];
-            bool ignoreIfSurrounded = (args[2] == 1);
+            if (!HasEnoughArgs(3))
+            {
+                return "command1006ForceFlee: [Error: Invalid arguments]";
+            }
+            
+            int scope = SafeGetArg(0);
+            int target = SafeGetArg(0);
+            bool ignoreIfSurrounded = (SafeGetArg(2) == 1);
             
             string targetStr = "";
             if (scope == 0)
@@ -983,22 +1324,32 @@ namespace RPGRewriter
         
         string command1007EnableCombo() // 87 6f
         {
-            int hero = args[0];
-            int battleCommand = args[1];
-            int repeats = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command1007EnableCombo: [Error: Invalid arguments]";
+            }
+            
+            int hero = SafeGetArg(0);
+            int battleCommand = SafeGetArg(1);
+            int repeats = SafeGetArg(2);
             
             return "Enable Combo: " + M.getDataHero(hero) + ", " + M.getDataBattleCommand(battleCommand) + ", Repeat x" + repeats;
         }
         
         string command1008ChangeClass() // 87 70
         {
-            int unknown = args[0];
-            int hero = args[1];
-            int classID = args[2];
-            int levelBehavior = args[3];
-            int skillBehavior = args[4];
-            int statBehavior = args[5];
-            bool showLevelUp = (args[6] == 1);
+            if (!HasEnoughArgs(7))
+            {
+                return "command1008ChangeClass: [Error: Invalid arguments]";
+            }
+            
+            int unknown = SafeGetArg(0);
+            int hero = SafeGetArg(1);
+            int classID = SafeGetArg(2);
+            int levelBehavior = SafeGetArg(3);
+            int skillBehavior = SafeGetArg(4);
+            int statBehavior = SafeGetArg(5);
+            bool showLevelUp = (SafeGetArg(6) == 1);
             
             return "Change Class: " + M.getDataHero(hero) + " to " + M.getDataClass(classID) + ", "
                 + classChangeLevel[levelBehavior] + ", "
@@ -1009,10 +1360,15 @@ namespace RPGRewriter
         
         string command1009ChangeBattleCommands() // 87 71
         {
-            int unknown = args[0];
-            int hero = args[1];
-            int battleCommand = args[2];
-            bool remove = (args[3] == 0);
+            if (!HasEnoughArgs(4))
+            {
+                return "command1009ChangeBattleCommands: [Error: Invalid arguments]";
+            }
+            
+            int unknown = SafeGetArg(0);
+            int hero = SafeGetArg(1);
+            int battleCommand = SafeGetArg(2);
+            bool remove = (SafeGetArg(3) == 0);
             
             return "Change Battle Commands: " + M.getDataHero(hero) + ", "
                 + (remove? "Remove" : "Add") + " " + M.getDataBattleCommand(battleCommand);
@@ -1021,8 +1377,13 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3005ManiacsUnknown()
         {
-            int unknown1 = args[0];
-            int unknown2 = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command3005ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            int unknown1 = SafeGetArg(0);
+            int unknown2 = SafeGetArg(1);
             
             return "Unknown Command (3005): " + unknown1 + ", " + unknown2;
         }
@@ -1030,31 +1391,36 @@ namespace RPGRewriter
         // todo: 2003 Maniacs patch command; only includes string for now, none of the arguments
         string command3007ShowStringPicture()
         {
+            if (!HasEnoughArgs(22))
+            {
+                return "command3007ShowStringPicture: [Error: Invalid arguments]";
+            }
+            
             string displayString = "";
             if (stringArg[0] == (char)0x01) // String starting with 0x01 indicates it's a string constant, which is the only one to really be concerned with
                 displayString = stringArg.Substring(1).Split((char)0x01)[0]; // Format is 0x01 string, 0x01 font, 0x01 system file - just grab the string
-            int unknown1 = args.Length > 0? args[0] : -1;
-            int unknown2 = args.Length > 1? args[1] : -1;
-            int unknown3 = args.Length > 2? args[2] : -1;
-            int unknown4 = args.Length > 3? args[3] : -1;
-            int unknown5 = args.Length > 4? args[4] : -1;
-            int unknown6 = args.Length > 5? args[5] : -1;
-            int unknown7 = args.Length > 6? args[6] : -1;
-            int unknown8 = args.Length > 7? args[7] : -1;
-            int unknown9 = args.Length > 8? args[8] : -1;
-            int unknown10 = args.Length > 9? args[9] : -1;
-            int unknown11 = args.Length > 10? args[10] : -1;
-            int unknown12 = args.Length > 11? args[11] : -1;
-            int unknown13 = args.Length > 12? args[12] : -1;
-            int unknown14 = args.Length > 13? args[13] : -1;
-            int unknown15 = args.Length > 14? args[14] : -1;
-            int unknown16 = args.Length > 15? args[15] : -1;
-            int unknown17 = args.Length > 16? args[16] : -1;
-            int unknown18 = args.Length > 17? args[17] : -1;
-            int unknown19 = args.Length > 18? args[18] : -1;
-            int unknown20 = args.Length > 19? args[19] : -1;
-            int unknown21 = args.Length > 20? args[20] : -1;
-            int unknown22 = args.Length > 21? args[21] : -1;
+            int unknown1 = HasEnoughArgs(0 + 1)? SafeGetArg(0) : -1;
+            int unknown2 = HasEnoughArgs(1 + 1)? SafeGetArg(1) : -1;
+            int unknown3 = HasEnoughArgs(2 + 1)? SafeGetArg(2) : -1;
+            int unknown4 = HasEnoughArgs(3 + 1)? SafeGetArg(3) : -1;
+            int unknown5 = HasEnoughArgs(4 + 1)? SafeGetArg(4) : -1;
+            int unknown6 = HasEnoughArgs(5 + 1)? SafeGetArg(5) : -1;
+            int unknown7 = HasEnoughArgs(6 + 1)? SafeGetArg(6) : -1;
+            int unknown8 = HasEnoughArgs(7 + 1)? SafeGetArg(7) : -1;
+            int unknown9 = HasEnoughArgs(8 + 1)? SafeGetArg(8) : -1;
+            int unknown10 = HasEnoughArgs(9 + 1)? SafeGetArg(9) : -1;
+            int unknown11 = HasEnoughArgs(10 + 1)? SafeGetArg(10) : -1;
+            int unknown12 = HasEnoughArgs(11 + 1)? SafeGetArg(11) : -1;
+            int unknown13 = HasEnoughArgs(12 + 1)? SafeGetArg(12) : -1;
+            int unknown14 = HasEnoughArgs(13 + 1)? SafeGetArg(13) : -1;
+            int unknown15 = HasEnoughArgs(14 + 1)? SafeGetArg(14) : -1;
+            int unknown16 = HasEnoughArgs(15 + 1)? SafeGetArg(15) : -1;
+            int unknown17 = HasEnoughArgs(16 + 1)? SafeGetArg(16) : -1;
+            int unknown18 = HasEnoughArgs(17 + 1)? SafeGetArg(17) : -1;
+            int unknown19 = HasEnoughArgs(18 + 1)? SafeGetArg(18) : -1;
+            int unknown20 = HasEnoughArgs(19 + 1)? SafeGetArg(19) : -1;
+            int unknown21 = HasEnoughArgs(20 + 1)? SafeGetArg(20) : -1;
+            int unknown22 = HasEnoughArgs(21 + 1)? SafeGetArg(21) : -1;
             
             return "Show String Picture: '" + displayString + "'";
         }
@@ -1062,14 +1428,19 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3008ManiacsUnknown()
         {
-            int unknown1 = args[0];
-            int unknown2 = args[1];
-            int unknown3 = args[2];
-            int unknown4 = args[3];
-            int unknown5 = args[4];
-            int unknown6 = args[5];
-            int unknown7 = args[6];
-            int unknown8 = args[7];
+            if (!HasEnoughArgs(8))
+            {
+                return "command3008ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            int unknown1 = SafeGetArg(0);
+            int unknown2 = SafeGetArg(1);
+            int unknown3 = SafeGetArg(2);
+            int unknown4 = SafeGetArg(3);
+            int unknown5 = SafeGetArg(4);
+            int unknown6 = SafeGetArg(5);
+            int unknown7 = SafeGetArg(6);
+            int unknown8 = SafeGetArg(7);
             
             return "Unknown Command (3008): " + unknown1 + ", " + unknown2 + ", " + unknown3 + ", " + unknown4 + ", " + unknown5 + ", " + unknown6 + ", " + unknown7 + ", " + unknown8;
         }
@@ -1077,11 +1448,16 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3013ManiacsUnknown()
         {
-            int unknown1 = args[0];
-            int unknown2 = args[1];
-            int unknown3 = args[2];
-            int unknown4 = args[3];
-            int unknown5 = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command3013ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            int unknown1 = SafeGetArg(0);
+            int unknown2 = SafeGetArg(1);
+            int unknown3 = SafeGetArg(2);
+            int unknown4 = SafeGetArg(3);
+            int unknown5 = SafeGetArg(4);
             
             return "Unknown Command (3013): " + unknown1 + ", " + unknown2 + ", " + unknown3 + ", " + unknown4 + ", " + unknown5;
         }
@@ -1089,10 +1465,15 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3014ManiacsUnknown()
         {
-            int unknown1 = args[0];
-            int unknown2 = args[1];
-            int unknown3 = args[2];
-            int unknown4 = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command3014ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            int unknown1 = SafeGetArg(0);
+            int unknown2 = SafeGetArg(1);
+            int unknown3 = SafeGetArg(2);
+            int unknown4 = SafeGetArg(3);
             
             return "Unknown Command (3014): " + unknown1 + ", " + unknown2 + ", " + unknown3 + ", " + unknown4;
         }
@@ -1100,12 +1481,17 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3016ManiacsUnknown()
         {
-            int unknown1 = args.Length > 0? args[0] : -1;
-            int unknown2 = args.Length > 1? args[1] : -1;
-            int unknown3 = args.Length > 2? args[2] : -1;
-            int unknown4 = args.Length > 3? args[3] : -1;
-            int unknown5 = args.Length > 4? args[4] : -1;
-            int unknown6 = args.Length > 5? args[5] : -1;
+            if (!HasEnoughArgs(6))
+            {
+                return "command3016ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            int unknown1 = HasEnoughArgs(0 + 1)? SafeGetArg(0) : -1;
+            int unknown2 = HasEnoughArgs(1 + 1)? SafeGetArg(1) : -1;
+            int unknown3 = HasEnoughArgs(2 + 1)? SafeGetArg(2) : -1;
+            int unknown4 = HasEnoughArgs(3 + 1)? SafeGetArg(3) : -1;
+            int unknown5 = HasEnoughArgs(4 + 1)? SafeGetArg(4) : -1;
+            int unknown6 = HasEnoughArgs(5 + 1)? SafeGetArg(5) : -1;
             
             return "Unknown Command (3016): " + unknown1 + ", " + unknown2 + ", " + unknown3 + ", " + unknown4 + ", " + unknown5 + ", " + unknown6;
         }
@@ -1113,10 +1499,15 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3018ManiacsUnknown()
         {
-            int unknown1 = args[0];
-            int unknown2 = args[1];
-            int unknown3 = args[2];
-            int unknown4 = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command3018ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            int unknown1 = SafeGetArg(0);
+            int unknown2 = SafeGetArg(1);
+            int unknown3 = SafeGetArg(2);
+            int unknown4 = SafeGetArg(3);
             
             return "Unknown Command (3018): " + unknown1 + ", " + unknown2 + ", " + unknown3 + ", " + unknown4;
         }
@@ -1124,14 +1515,19 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3021ManiacsUnknown()
         {
-            int unknown1 = args[0];
-            int unknown2 = args[1];
-            int unknown3 = args[2];
-            int unknown4 = args[3];
-            int unknown5 = args[4];
-            int unknown6 = args[5];
-            int unknown7 = args[6];
-            int unknown8 = args[7];
+            if (!HasEnoughArgs(8))
+            {
+                return "command3021ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            int unknown1 = SafeGetArg(0);
+            int unknown2 = SafeGetArg(1);
+            int unknown3 = SafeGetArg(2);
+            int unknown4 = SafeGetArg(3);
+            int unknown5 = SafeGetArg(4);
+            int unknown6 = SafeGetArg(5);
+            int unknown7 = SafeGetArg(6);
+            int unknown8 = SafeGetArg(7);
             
             return "Unknown Command (3021): " + unknown1 + ", " + unknown2 + ", " + unknown3 + ", " + unknown4 + ", " + unknown5 + ", " + unknown6 + ", " + unknown7 + ", " + unknown8;
         }
@@ -1139,13 +1535,18 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3025ManiacsUnknown()
         {
-            int unknown1 = args[0];
-            int unknown2 = args[1];
-            int unknown3 = args[2];
-            int unknown4 = args[3];
-            int unknown5 = args[4];
-            int unknown6 = args[5];
-            int unknown7 = args[6];
+            if (!HasEnoughArgs(7))
+            {
+                return "command3025ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            int unknown1 = SafeGetArg(0);
+            int unknown2 = SafeGetArg(1);
+            int unknown3 = SafeGetArg(2);
+            int unknown4 = SafeGetArg(3);
+            int unknown5 = SafeGetArg(4);
+            int unknown6 = SafeGetArg(5);
+            int unknown7 = SafeGetArg(6);
             
             return "Unknown Command (3025): " + unknown1 + ", " + unknown2 + ", " + unknown3 + ", " + unknown4 + ", " + unknown5 + ", " + unknown6 + ", " + unknown7;
         }
@@ -1153,10 +1554,15 @@ namespace RPGRewriter
         // todo: unknown 2003 Maniacs patch command
         string command3026ManiacsUnknown()
         {
+            if (!HasEnoughArgs(3))
+            {
+                return "command3026ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
             string unknownString = stringArg;
-            int unknown1 = args[0];
-            int unknown2 = args[1];
-            int unknown3 = args[2];
+            int unknown1 = SafeGetArg(0);
+            int unknown2 = SafeGetArg(1);
+            int unknown3 = SafeGetArg(2);
             
             return "Unknown Command (3026): " + unknownString + ", " + unknown1 + ", " + unknown2 + ", " + unknown3;
         }
@@ -1198,10 +1604,15 @@ namespace RPGRewriter
         
         string command10120MessageOptions() // cf 08
         {
-            bool transparent = (args[0] == 1);
-            int position = args[1];
-            bool dontCoverHero = (args[2] == 1);
-            bool continueEvents = (args[3] == 1);
+            if (!HasEnoughArgs(4))
+            {
+                return "command10120MessageOptions: [Error: Invalid arguments]";
+            }
+            
+            bool transparent = (SafeGetArg(0) == 1);
+            int position = SafeGetArg(1);
+            bool dontCoverHero = (SafeGetArg(2) == 1);
+            bool continueEvents = (SafeGetArg(3) == 1);
             
             return "Message Options: "
                 + (!transparent? "Normal" : "Transparent") + ", "
@@ -1212,9 +1623,14 @@ namespace RPGRewriter
         
         string command10130ChangeFace() // cf 12
         {
-            int index = args[0];
-            bool rightSide = (args[1] == 1);
-            bool flip = (args[2] == 1);
+            if (!HasEnoughArgs(3))
+            {
+                return "command10130ChangeFace: [Error: Invalid arguments]";
+            }
+            
+            int index = SafeGetArg(0);
+            bool rightSide = (SafeGetArg(1) == 1);
+            bool flip = (SafeGetArg(2) == 1);
             
             if (M.starUnknownMode)
             {
@@ -1316,7 +1732,12 @@ namespace RPGRewriter
         
         string command10140Choice() // cf 1c
         {
-            int cancelType = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command10140Choice: [Error: Invalid arguments]";
+            }
+            
+            int cancelType = SafeGetArg(0);
             
             if (!M.includeActions)
                 return "<" + stringArg + ">";
@@ -1327,7 +1748,12 @@ namespace RPGRewriter
         
         string command20140ChoiceCase() // 81 9d 2c
         {
-            int number = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command20140ChoiceCase: [Error: Invalid arguments]";
+            }
+            
+            int number = SafeGetArg(0);
             
             bool includeString = M.includeMessages || (M.stringScriptExportMode && M.userSettings["StringScriptDetails"] == 1);
             
@@ -1349,18 +1775,28 @@ namespace RPGRewriter
         
         string command10150InputNumber() // cf 26
         {
-            int digits = args[0];
-            int variableID = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command10150InputNumber: [Error: Invalid arguments]";
+            }
+            
+            int digits = SafeGetArg(0);
+            int variableID = SafeGetArg(1);
             
             return "Input Number: " + digits + " digit" + (digits != 1? "s" : "") + ", Variable " + M.getDataVariable(variableID);
         }
         
         string command10210Switch() // cf 62
         {
-            int type = args[0];
-            int switch1 = args[1];
-            int switch2 = args[2];
-            int setType = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command10210Switch: [Error: Invalid arguments]";
+            }
+            
+            int type = SafeGetArg(0);
+            int switch1 = SafeGetArg(1);
+            int switch2 = SafeGetArg(2);
+            int setType = SafeGetArg(3);
             
             string switchName = "";
             if (type == 0) // One
@@ -1376,13 +1812,18 @@ namespace RPGRewriter
         
         string command10220Variable() // cf 6c
         {
-            int type = args[0];
-            int var1 = args[1];
-            int var2 = args[2];
-            int operation = args[3];
-            int operand = args[4];
-            int value = args[5];
-            int value2 = args.Length > 6? args[6] : 0;
+            if (!HasEnoughArgs(7))
+            {
+                return "command10220Variable: [Error: Invalid arguments]";
+            }
+            
+            int type = SafeGetArg(0);
+            int var1 = SafeGetArg(1);
+            int var2 = SafeGetArg(2);
+            int operation = SafeGetArg(3);
+            int operand = SafeGetArg(4);
+            int value = SafeGetArg(5);
+            int value2 = HasEnoughArgs(6 + 1)? SafeGetArg(6) : 0;
             
             string variableName = "";
             if (type == 0) // One
@@ -1404,25 +1845,30 @@ namespace RPGRewriter
             else if (operand == 4) // Item
                 rightSide = M.getDataItem(value) + " Quantity " + (value2 == 0? "(Owned)" : "(Equipped)");
             else if (operand == 5) // Hero
-                rightSide = M.getDataHero(value) + "'s " + heroQualities[value2];
+                rightSide = M.getDataHero(value) + "'s " + SafeLabel(heroQualities, value2);
             else if (operand == 6) // Event
-                rightSide = M.getTargetEvent(value) + "'s " + eventQualities[value2];
+                rightSide = M.getTargetEvent(value) + "'s " + SafeLabel(eventQualities, value2);
             else if (operand == 7) // Other
-                rightSide = miscData[value];
+                rightSide = SafeLabel(miscData, value);
             else if (operand == 8) // Enemy (In Battle)
-                rightSide = "Enemy " + (value + 1) + "'s " + enemyStats[value2];
+                rightSide = "Enemy " + (value + 1) + "'s " + SafeLabel(enemyStats, value2);
             
             return "Change Variable: " + variableName + " " + operations[operation] + " " + rightSide;
         }
         
         string command10230Timer() // cf 76
         {
-            int operation = args[0];
-            bool byVariable = (args[1] == 1);
-            int seconds = args[2];
-            bool display = (args[3] == 1);
-            bool inBattle = (args[4] == 1);
-            int whichTimer = args.Length > 5? args[5] : 0; // 2003
+            if (!HasEnoughArgs(6))
+            {
+                return "command10230Timer: [Error: Invalid arguments]";
+            }
+            
+            int operation = SafeGetArg(0);
+            bool byVariable = (SafeGetArg(1) == 1);
+            int seconds = SafeGetArg(2);
+            bool display = (SafeGetArg(3) == 1);
+            bool inBattle = (SafeGetArg(4) == 1);
+            int whichTimer = HasEnoughArgs(5 + 1)? SafeGetArg(5) : 0; // 2003
             
             string setStart = "";
             if (operation == 0) // Set
@@ -1440,11 +1886,22 @@ namespace RPGRewriter
                 + (operation == 0? "Set" : operation == 1? "Start" : "Stop") + setStart;
         }
         
+        string command0040ManiacsNoOp()
+        {
+            // Maniacs-patched projects can contain placeholder commands with opcode 40 that do nothing.
+            return "";
+        }
+        
         string command10310ChangeMoney() // d0 46
         {
-            bool remove = (args[0] == 1);
-            bool byVariable = (args[1] == 1);
-            int value = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command10310ChangeMoney: [Error: Invalid arguments]";
+            }
+            
+            bool remove = (SafeGetArg(0) == 1);
+            bool byVariable = (SafeGetArg(1) == 1);
+            int value = SafeGetArg(2);
             
             return "Change Money: "
                 + (!remove? "Add" : "Subtract") + " "
@@ -1453,11 +1910,16 @@ namespace RPGRewriter
         
         string command10320ChangeItems() // d0 50
         {
-            bool drop = (args[0] == 1);
-            bool byVariableLeft = (args[1] == 1);
-            int value = args[2];
-            bool byVariableRight = (args[3] == 1);
-            int value2 = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command10320ChangeItems: [Error: Invalid arguments]";
+            }
+            
+            bool drop = (SafeGetArg(0) == 1);
+            bool byVariableLeft = (SafeGetArg(1) == 1);
+            int value = SafeGetArg(2);
+            bool byVariableRight = (SafeGetArg(3) == 1);
+            int value2 = SafeGetArg(4);
             
             if (M.checkUnusedData && byVariableLeft) // Variable reference to Items
                 M.variableReferencedDatabases.Add("Items");
@@ -1470,9 +1932,14 @@ namespace RPGRewriter
         
         string command10330ChangeParty() // d0 5a
         {
-            bool remove = (args[0] == 1);
-            bool byVariable = (args[1] == 1);
-            int value = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command10330ChangeParty: [Error: Invalid arguments]";
+            }
+            
+            bool remove = (SafeGetArg(0) == 1);
+            bool byVariable = (SafeGetArg(1) == 1);
+            int value = SafeGetArg(2);
             
             if (M.checkUnusedData && byVariable) // Variable reference to Heroes
                 M.variableReferencedDatabases.Add("Heroes");
@@ -1484,12 +1951,17 @@ namespace RPGRewriter
         
         string command10410ChangeEXP() // d1 2a
         {
-            int target = args[0];
-            int value = args[1];
-            bool subtract = (args[2] == 1);
-            bool byVariable = (args[3] == 1);
-            int value2 = args[4];
-            bool showLevelUp = (args[5] == 1);
+            if (!HasEnoughArgs(6))
+            {
+                return "command10410ChangeEXP: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            bool subtract = (SafeGetArg(2) == 1);
+            bool byVariable = (SafeGetArg(3) == 1);
+            int value2 = SafeGetArg(4);
+            bool showLevelUp = (SafeGetArg(5) == 1);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1502,12 +1974,17 @@ namespace RPGRewriter
         
         string command10420ChangeLevel() // d1 34
         {
-            int target = args[0];
-            int value = args[1];
-            bool subtract = (args[2] == 1);
-            bool byVariable = (args[3] == 1);
-            int value2 = args[4];
-            bool showLevelUp = (args[5] == 1);
+            if (!HasEnoughArgs(6))
+            {
+                return "command10420ChangeLevel: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            bool subtract = (SafeGetArg(2) == 1);
+            bool byVariable = (SafeGetArg(3) == 1);
+            int value2 = SafeGetArg(4);
+            bool showLevelUp = (SafeGetArg(5) == 1);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1520,12 +1997,17 @@ namespace RPGRewriter
         
         string command10430ChangeStats() // d1 3e
         {
-            int target = args[0];
-            int value = args[1];
-            bool minus = (args[2] == 1);
-            int stat = args[3];
-            bool byVariable = (args[4] == 1);
-            int value2 = args[5];
+            if (!HasEnoughArgs(6))
+            {
+                return "command10430ChangeStats: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            bool minus = (SafeGetArg(2) == 1);
+            int stat = SafeGetArg(3);
+            bool byVariable = (SafeGetArg(4) == 1);
+            int value2 = SafeGetArg(5);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1538,11 +2020,16 @@ namespace RPGRewriter
         
         string command10440ChangeSkills() // d1 48
         {
-            int target = args[0];
-            int value = args[1];
-            bool unlearn = (args[2] == 1);
-            bool byVariable = (args[3] == 1);
-            int value2 = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command10440ChangeSkills: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            bool unlearn = (SafeGetArg(2) == 1);
+            bool byVariable = (SafeGetArg(3) == 1);
+            int value2 = SafeGetArg(4);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1554,11 +2041,16 @@ namespace RPGRewriter
         
         string command10450ChangeEquip() // d1 52
         {
-            int target = args[0];
-            int value = args[1];
-            bool unequip = args[2] == 1;
-            int type = args[3];
-            int value2 = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command10450ChangeEquip: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            bool unequip = SafeGetArg(2) == 1;
+            int type = SafeGetArg(3);
+            int value2 = SafeGetArg(4);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1581,12 +2073,17 @@ namespace RPGRewriter
         
         string command10460ChangeHP() // d1 5c
         {
-            int target = args[0];
-            int value = args[1];
-            bool subtract = (args[2] == 1);
-            bool byVariable = (args[3] == 1);
-            int value2 = args[4];
-            bool canDie = (args[5] == 1);
+            if (!HasEnoughArgs(6))
+            {
+                return "command10460ChangeHP: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            bool subtract = (SafeGetArg(2) == 1);
+            bool byVariable = (SafeGetArg(3) == 1);
+            int value2 = SafeGetArg(4);
+            bool canDie = (SafeGetArg(5) == 1);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1599,11 +2096,16 @@ namespace RPGRewriter
         
         string command10470ChangeMP() // d1 66
         {
-            int target = args[0];
-            int value = args[1];
-            bool subtract = (args[2] == 1);
-            bool byVariable = (args[3] == 1);
-            int value2 = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command10470ChangeMP: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            bool subtract = (SafeGetArg(2) == 1);
+            bool byVariable = (SafeGetArg(3) == 1);
+            int value2 = SafeGetArg(4);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1615,10 +2117,15 @@ namespace RPGRewriter
         
         string command10480ChangeState() // d1 70
         {
-            int target = args[0];
-            int value = args[1];
-            bool cure = (args[2] == 1);
-            int conditionID = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command10480ChangeState: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            bool cure = (SafeGetArg(2) == 1);
+            int conditionID = SafeGetArg(3);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1630,8 +2137,13 @@ namespace RPGRewriter
         
         string command10490FullRecover() // d1 7a
         {
-            int target = args[0];
-            int value = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command10490FullRecover: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1640,14 +2152,19 @@ namespace RPGRewriter
         
         string command10500Damage() // d2 04
         {
-            int target = args[0];
-            int value = args[1];
-            int attack = args[2];
-            int defensePercent = args[3];
-            int mindPercent = args[4];
-            int variance = args[5];
-            bool useVariable = (args[6] == 1);
-            int variableID = args[7];
+            if (!HasEnoughArgs(8))
+            {
+                return "command10500Damage: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int value = SafeGetArg(1);
+            int attack = SafeGetArg(2);
+            int defensePercent = SafeGetArg(3);
+            int mindPercent = SafeGetArg(4);
+            int variance = SafeGetArg(5);
+            bool useVariable = (SafeGetArg(6) == 1);
+            int variableID = SafeGetArg(7);
             
             string targetName = M.getHeroTarget(target, value);
             
@@ -1662,23 +2179,38 @@ namespace RPGRewriter
         
         string command10610NameChange() // d2 72
         {
-            int hero = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command10610NameChange: [Error: Invalid arguments]";
+            }
+            
+            int hero = SafeGetArg(0);
             
             return "Change Name: " + M.getDataHero(hero) + ", " + (M.includeMessages? stringArg : "___");
         }
         
         string command10620TitleChange() // d2 7c
         {
-            int hero = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command10620TitleChange: [Error: Invalid arguments]";
+            }
+            
+            int hero = SafeGetArg(0);
             
             return "Change Title: " + M.getDataHero(hero) + ", " + (M.includeMessages? stringArg : "___");
         }
         
         string command10630CharSetChange() // d3 06
         {
-            int hero = args[0];
-            int index = args[1];
-            bool transparent = (args[2] == 1);
+            if (!HasEnoughArgs(3))
+            {
+                return "command10630CharSetChange: [Error: Invalid arguments]";
+            }
+            
+            int hero = SafeGetArg(0);
+            int index = SafeGetArg(1);
+            bool transparent = (SafeGetArg(2) == 1);
             
             return "Change Walk Graphic: " + M.getDataHero(hero) + ", "
                 + stringArg + ", Index " + (index + 1)
@@ -1687,8 +2219,13 @@ namespace RPGRewriter
         
         string command10640FaceSetChange() // d3 10
         {
-            int hero = args[0];
-            int index = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command10640FaceSetChange: [Error: Invalid arguments]";
+            }
+            
+            int hero = SafeGetArg(0);
+            int index = SafeGetArg(1);
             
             return "Change Face: " + M.getDataHero(hero) + ", "
                 + stringArg + ", Index " + (index + 1);
@@ -1696,8 +2233,13 @@ namespace RPGRewriter
         
         string command10650VehicleGraphic() // d3 1a
         {
-            int vehicle = args[0];
-            int index = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command10650VehicleGraphic: [Error: Invalid arguments]";
+            }
+            
+            int vehicle = SafeGetArg(0);
+            int index = SafeGetArg(1);
             
             return "Change Vehicle Graphic: "
                 + (vehicle == 0? "Boat" : vehicle == 1? "Ship" : "Airship") + ", "
@@ -1706,11 +2248,16 @@ namespace RPGRewriter
         
         string command10660SystemBGMChange() // d3 24
         {
-            int song = args[0];
-            int fade = args[1];
-            int volume = args[2];
-            int tempo = args[3];
-            int balance = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command10660SystemBGMChange: [Error: Invalid arguments]";
+            }
+            
+            int song = SafeGetArg(0);
+            int fade = SafeGetArg(1);
+            int volume = SafeGetArg(2);
+            int tempo = SafeGetArg(3);
+            int balance = SafeGetArg(4);
             
             return "Change System BGM: " + systemBGMs[song] + ", " + stringArg
                 + ", Fade " + (fade / 1000) + " sec, "
@@ -1719,10 +2266,15 @@ namespace RPGRewriter
         
         string command10670SystemSoundChange() // d3 2e
         {
-            int sound = args[0];
-            int volume = args[1];
-            int tempo = args[2];
-            int balance = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command10670SystemSoundChange: [Error: Invalid arguments]";
+            }
+            
+            int sound = SafeGetArg(0);
+            int volume = SafeGetArg(1);
+            int tempo = SafeGetArg(2);
+            int balance = SafeGetArg(3);
             
             return "Change System Sound: " + systemSounds[sound] + ", " + stringArg + ", "
                 + M.getSoundVTB(volume, tempo, balance);
@@ -1730,8 +2282,13 @@ namespace RPGRewriter
         
         string command10680SystemGraphicsChange() // d3 38
         {
-            bool tile = (args[0] == 1);
-            int font = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command10680SystemGraphicsChange: [Error: Invalid arguments]";
+            }
+            
+            bool tile = (SafeGetArg(0) == 1);
+            int font = SafeGetArg(1);
             
             return "Change System Graphics: " + stringArg + ", "
                 + (tile? "Tile" : "Stretch") + ", "
@@ -1740,8 +2297,13 @@ namespace RPGRewriter
         
         string command10690TransitionChange() // d3 42
         {
-            int transition = args[0];
-            int effect = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command10690TransitionChange: [Error: Invalid arguments]";
+            }
+            
+            int transition = SafeGetArg(0);
+            int effect = SafeGetArg(1);
             
             string effectStr = "";
             if (transition == 0 || transition == 2 || transition == 4)
@@ -1754,17 +2316,22 @@ namespace RPGRewriter
         
         string command10710BattleStart() // d3 56
         {
-            bool byVariable = (args[0] == 1);
-            int troop = args[1];
-            int bgType = args[2];
-            int escape = args[3];
-            bool defeatCase = (args[4] == 1);
-            bool firstStrike = (args[5] == 1);
-            int specialBattleType = args.Length > 6? args[6] : 0; // 2003
-            int looseTight = args.Length > 7? args[7] : 0; // 2003
-            int terrain = args.Length > 8? args[8] : 0; // 2003
+            if (!HasEnoughArgs(9))
+            {
+                return "command10710BattleStart: [Error: Invalid arguments]";
+            }
             
-            bool extended = args.Length > 6;
+            bool byVariable = (SafeGetArg(0) == 1);
+            int troop = SafeGetArg(1);
+            int bgType = SafeGetArg(2);
+            int escape = SafeGetArg(3);
+            bool defeatCase = (SafeGetArg(4) == 1);
+            bool firstStrike = (SafeGetArg(5) == 1);
+            int specialBattleType = HasEnoughArgs(6 + 1)? SafeGetArg(6) : 0; // 2003
+            int looseTight = HasEnoughArgs(7 + 1)? SafeGetArg(7) : 0; // 2003
+            int terrain = HasEnoughArgs(8 + 1)? SafeGetArg(8) : 0; // 2003
+            
+            bool extended = HasEnoughArgs(6 + 1);
             
             string specialConditionStr = "", bgString = "";
             if (extended)
@@ -1814,10 +2381,15 @@ namespace RPGRewriter
         
         string command10720OpenShop() // d3 60
         {
-            int shopType = args[0];
-            int message = args[1];
-            bool successBranch = (args[2] == 1);
-            // args[3] might be item list length
+            if (!HasEnoughArgs(4))
+            {
+                return "command10720OpenShop: [Error: Invalid arguments]";
+            }
+            
+            int shopType = SafeGetArg(0);
+            int message = SafeGetArg(1);
+            bool successBranch = (SafeGetArg(2) == 1);
+            // SafeGetArg(3) might be item list length
             
             string shopList = "";
             for (int i = 4; i < args.Length; i++)
@@ -1851,9 +2423,14 @@ namespace RPGRewriter
         
         string command10730CallInn() // d3 6a
         {
-            int message = args[0];
-            int price = args[1];
-            bool successBranch = (args[2] == 1);
+            if (!HasEnoughArgs(3))
+            {
+                return "command10730CallInn: [Error: Invalid arguments]";
+            }
+            
+            int message = SafeGetArg(0);
+            int price = SafeGetArg(1);
+            bool successBranch = (SafeGetArg(2) == 1);
             
             return "Call Inn: "
                 + "Message Set " + (message == 0? "A" : "B") + ", "
@@ -1878,9 +2455,14 @@ namespace RPGRewriter
         
         string command10740NameEntry() // d3 74
         {
-            int hero = args[0];
-            int inputPage = args[1];
-            bool showDefault = (args[2] == 1);
+            if (!HasEnoughArgs(3))
+            {
+                return "command10740NameEntry: [Error: Invalid arguments]";
+            }
+            
+            int hero = SafeGetArg(0);
+            int inputPage = SafeGetArg(1);
+            bool showDefault = (SafeGetArg(2) == 1);
             
             return "Enter Hero Name: " + M.getDataHero(hero) + ", "
                 + (inputPage == 0? "Page 1 (Hiragana)" : "Page 2 (Katakana)") + " Input"
@@ -1889,19 +2471,29 @@ namespace RPGRewriter
         
         string command10810Teleport() // d3 3a
         {
-            int map = args[0];
-            int x = args[1];
-            int y = args[2];
-            int dir = args.Length > 3? args[3] - 1 : -1; // 2003
+            if (!HasEnoughArgs(4))
+            {
+                return "command10810Teleport: [Error: Invalid arguments]";
+            }
+            
+            int map = SafeGetArg(0);
+            int x = SafeGetArg(1);
+            int y = SafeGetArg(2);
+            int dir = HasEnoughArgs(3 + 1)? SafeGetArg(3) - 1 : -1; // 2003
             
             return "Teleport: " + M.getDataMap(map) + " (" + x + "," + y + ")" + (dir != -1? (", Face " + Page.charDirs[dir]) : "");
         }
         
         string command10820RememberPlace() // d4 44
         {
-            int map = args[0];
-            int x = args[1];
-            int y = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command10820RememberPlace: [Error: Invalid arguments]";
+            }
+            
+            int map = SafeGetArg(0);
+            int x = SafeGetArg(1);
+            int y = SafeGetArg(2);
             
             return "Remember Location: "
                 + "Map to " + M.getDataVariable(map) + ", X to " + M.getDataVariable(x) + ", Y to " + M.getDataVariable(y);
@@ -1909,9 +2501,14 @@ namespace RPGRewriter
         
         string command10830RestorePlace() // d4 4e
         {
-            int map = args[0];
-            int x = args[1];
-            int y = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command10830RestorePlace: [Error: Invalid arguments]";
+            }
+            
+            int map = SafeGetArg(0);
+            int x = SafeGetArg(1);
+            int y = SafeGetArg(2);
             
             return "Restore Location: "
                 + "Map from " + M.getDataVariable(map) + ", X from " + M.getDataVariable(x) + ", Y from " + M.getDataVariable(y);
@@ -1924,11 +2521,16 @@ namespace RPGRewriter
         
         string command10850PlaceVehicle() // d4 64
         {
-            int vehicle = args[0];
-            bool byVariable = (args[1] == 1);
-            int map = args[2];
-            int x = args[3];
-            int y = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command10850PlaceVehicle: [Error: Invalid arguments]";
+            }
+            
+            int vehicle = SafeGetArg(0);
+            bool byVariable = (SafeGetArg(1) == 1);
+            int map = SafeGetArg(2);
+            int x = SafeGetArg(3);
+            int y = SafeGetArg(4);
             
             string positionStr = "";
             if (!byVariable)
@@ -1943,11 +2545,16 @@ namespace RPGRewriter
         
         string command10860PlaceEvent() // d4 6c
         {
-            int ev = args[0];
-            bool byVariable = (args[1] == 1);
-            int x = args[2];
-            int y = args[3];
-            int dir = args.Length > 4? args[4] - 1 : -1; // 2003
+            if (!HasEnoughArgs(5))
+            {
+                return "command10860PlaceEvent: [Error: Invalid arguments]";
+            }
+            
+            int ev = SafeGetArg(0);
+            bool byVariable = (SafeGetArg(1) == 1);
+            int x = SafeGetArg(2);
+            int y = SafeGetArg(3);
+            int dir = HasEnoughArgs(4 + 1)? SafeGetArg(4) - 1 : -1; // 2003
             
             string positionStr = "";
             if (!byVariable)
@@ -1963,8 +2570,13 @@ namespace RPGRewriter
         
         string command10870SwapEvents() // d4 76
         {
-            int ev = args[0];
-            int ev2 = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command10870SwapEvents: [Error: Invalid arguments]";
+            }
+            
+            int ev = SafeGetArg(0);
+            int ev2 = SafeGetArg(1);
             
             return "Swap Events: "
                 + (ev == 10005? "This Event" : "Event #" + ev) + ", "
@@ -1973,10 +2585,15 @@ namespace RPGRewriter
         
         string command10910GetTerrainID() // d5 1e
         {
-            bool byVariable = (args[0] == 1);
-            int x = args[1];
-            int y = args[2];
-            int destinationVar = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command10910GetTerrainID: [Error: Invalid arguments]";
+            }
+            
+            bool byVariable = (SafeGetArg(0) == 1);
+            int x = SafeGetArg(1);
+            int y = SafeGetArg(2);
+            int destinationVar = SafeGetArg(3);
             
             string positionStr = "";
             if (!byVariable)
@@ -1990,10 +2607,15 @@ namespace RPGRewriter
         
         string command10920GetEventID() // d5 28
         {
-            bool byVariable = (args[0] == 1);
-            int x = args[1];
-            int y = args[2];
-            int destinationVar = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command10920GetEventID: [Error: Invalid arguments]";
+            }
+            
+            bool byVariable = (SafeGetArg(0) == 1);
+            int x = SafeGetArg(1);
+            int y = SafeGetArg(2);
+            int destinationVar = SafeGetArg(3);
             
             string positionStr = "";
             if (!byVariable)
@@ -2007,26 +2629,41 @@ namespace RPGRewriter
         
         string command11010EraseScreen() // d6 02
         {
-            int effect = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command11010EraseScreen: [Error: Invalid arguments]";
+            }
+            
+            int effect = SafeGetArg(0);
             
             return "Erase Screen: " + M.getEraseEffects(effect);
         }
         
         string command11020ShowScreen() // d6 0c
         {
-            int effect = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command11020ShowScreen: [Error: Invalid arguments]";
+            }
+            
+            int effect = SafeGetArg(0);
             
             return "Show Screen: " + M.getShowEffects(effect);
         }
         
         string command11030ScreenTone() // d6 16
         {
-            int red = args[0];
-            int green = args[1];
-            int blue = args[2];
-            int chroma = args[3];
-            int time = args[4];
-            bool wait = (args[5] == 1);
+            if (!HasEnoughArgs(6))
+            {
+                return "command11030ScreenTone: [Error: Invalid arguments]";
+            }
+            
+            int red = SafeGetArg(0);
+            int green = SafeGetArg(1);
+            int blue = SafeGetArg(2);
+            int chroma = SafeGetArg(3);
+            int time = SafeGetArg(4);
+            bool wait = (SafeGetArg(5) == 1);
             
             float sec = time / 10f;
             
@@ -2038,13 +2675,18 @@ namespace RPGRewriter
         
         string command11040ScreenFlash() // d6 20
         {
-            int red = args[0];
-            int green = args[1];
-            int blue = args[2];
-            int power = args[3];
-            int time = args[4];
-            bool wait = (args[5] == 1);
-            int function = args.Length > 6? args[6] : 0; // 2003
+            if (!HasEnoughArgs(7))
+            {
+                return "command11040ScreenFlash: [Error: Invalid arguments]";
+            }
+            
+            int red = SafeGetArg(0);
+            int green = SafeGetArg(1);
+            int blue = SafeGetArg(2);
+            int power = SafeGetArg(3);
+            int time = SafeGetArg(4);
+            bool wait = (SafeGetArg(5) == 1);
+            int function = HasEnoughArgs(6 + 1)? SafeGetArg(6) : 0; // 2003
             
             float sec = time / 10f;
             
@@ -2064,11 +2706,16 @@ namespace RPGRewriter
         
         string command11050ScreenShake() // d6 2a
         {
-            int power = args[0];
-            int speed = args[1];
-            int time = args[2];
-            bool wait = (args[3] == 1);
-            int function = args.Length > 4? args[4] : 0; // 2003
+            if (!HasEnoughArgs(5))
+            {
+                return "command11050ScreenShake: [Error: Invalid arguments]";
+            }
+            
+            int power = SafeGetArg(0);
+            int speed = SafeGetArg(1);
+            int time = SafeGetArg(2);
+            bool wait = (SafeGetArg(3) == 1);
+            int function = HasEnoughArgs(4 + 1)? SafeGetArg(4) : 0; // 2003
             
             float sec = time / 10f;
             
@@ -2086,11 +2733,16 @@ namespace RPGRewriter
         
         string command11060PanScreen() // d6 34
         {
-            int type = args[0];
-            int dir = args[1];
-            int chips = args[2];
-            int speed = args[3];
-            bool wait = (args[4] == 1);
+            if (!HasEnoughArgs(5))
+            {
+                return "command11060PanScreen: [Error: Invalid arguments]";
+            }
+            
+            int type = SafeGetArg(0);
+            int dir = SafeGetArg(1);
+            int chips = SafeGetArg(2);
+            int speed = SafeGetArg(3);
+            bool wait = (SafeGetArg(4) == 1);
             
             string moveStr = "";
             if (type == 0)
@@ -2109,8 +2761,13 @@ namespace RPGRewriter
         
         string command11070Weather() // d6 3e
         {
-            int weather = args[0];
-            int power = args[1];
+            if (!HasEnoughArgs(2))
+            {
+                return "command11070Weather: [Error: Invalid arguments]";
+            }
+            
+            int weather = SafeGetArg(0);
+            int power = SafeGetArg(1);
             
             return "Call Weather: "
                 + weathers[weather]
@@ -2120,37 +2777,42 @@ namespace RPGRewriter
         // todo: most of the 2003 English Picture extensions are not noted
         string command11110Picture() // d6 66
         {
-            int picNum = args[0];
-            bool positionByVariable = (args[1] == 1);
-            int x = args[2];
-            int y = args[3];
-            bool followMap = (args[4] == 1);
-            int zoom = args[5];
-            int topTrans = args[6];
-            int transColor = args[7];
-            int red = args[8];
-            int green = args[9];
-            int blue = args[10];
-            int chroma = args[11];
-            int effect = args[12];
-            int effectValue = args[13];
-            int bottomTrans = args.Length > 14? args[14] : 0; // 2003
-            // 15 and 16 not used in Show Picture
-            bool picNumByVariable = args.Length > 17? (args[17] == 1) : false; // 2003 English
-            int picPointerDigits = args.Length > 18? args[18] : 0; // 2003 English, not noted
-            int picPointerVariableID = args.Length > 19? args[19] : 0; // 2003 English, not noted
-            bool zoomByVariable = args.Length > 20? (args[20] == 1) : false; // 2003 English
-            bool topTransByVariable = args.Length > 21? (args[21] == 1) : false; // 2003 English
-            int spritesheetColumns = args.Length > 22? args[22] : 0; // 2003 English, not noted
-            int spritesheetRows = args.Length > 23? args[23] : 0; // 2003 English, not noted
-            int spritesheetAnimate = args.Length > 24? args[24] : 0; // 2003 English, not noted
-            int spritesheetFrameOrSpeed = args.Length > 25? args[25] : 0; // 2003 English, not noted
-            int spritesheetLoop = args.Length > 26? args[26] : 0; // 2003 English, not noted
-            int mapLayer = args.Length > 27? args[27] : 0; // 2003 English, not noted
-            int battleLayer = args.Length > 28? args[28] : 0; // 2003 English, not noted
-            int flags = args.Length > 29? args[29] : 0; // 2003 English, not noted
+            if (!HasEnoughArgs(30))
+            {
+                return "command11110Picture: [Error: Invalid arguments]";
+            }
             
-            bool extended = args.Length > 14;
+            int picNum = SafeGetArg(0);
+            bool positionByVariable = (SafeGetArg(1) == 1);
+            int x = SafeGetArg(2);
+            int y = SafeGetArg(3);
+            bool followMap = (SafeGetArg(4) == 1);
+            int zoom = SafeGetArg(5);
+            int topTrans = SafeGetArg(6);
+            int transColor = SafeGetArg(7);
+            int red = SafeGetArg(8);
+            int green = SafeGetArg(9);
+            int blue = SafeGetArg(10);
+            int chroma = SafeGetArg(11);
+            int effect = SafeGetArg(12);
+            int effectValue = SafeGetArg(13);
+            int bottomTrans = HasEnoughArgs(14 + 1)? SafeGetArg(14) : 0; // 2003
+            // 15 and 16 not used in Show Picture
+            bool picNumByVariable = HasEnoughArgs(17 + 1)? (SafeGetArg(17) == 1) : false; // 2003 English
+            int picPointerDigits = HasEnoughArgs(18 + 1)? SafeGetArg(18) : 0; // 2003 English, not noted
+            int picPointerVariableID = HasEnoughArgs(19 + 1)? SafeGetArg(19) : 0; // 2003 English, not noted
+            bool zoomByVariable = HasEnoughArgs(20 + 1)? (SafeGetArg(20) == 1) : false; // 2003 English
+            bool topTransByVariable = HasEnoughArgs(21 + 1)? (SafeGetArg(21) == 1) : false; // 2003 English
+            int spritesheetColumns = HasEnoughArgs(22 + 1)? SafeGetArg(22) : 0; // 2003 English, not noted
+            int spritesheetRows = HasEnoughArgs(23 + 1)? SafeGetArg(23) : 0; // 2003 English, not noted
+            int spritesheetAnimate = HasEnoughArgs(24 + 1)? SafeGetArg(24) : 0; // 2003 English, not noted
+            int spritesheetFrameOrSpeed = HasEnoughArgs(25 + 1)? SafeGetArg(25) : 0; // 2003 English, not noted
+            int spritesheetLoop = HasEnoughArgs(26 + 1)? SafeGetArg(26) : 0; // 2003 English, not noted
+            int mapLayer = HasEnoughArgs(27 + 1)? SafeGetArg(27) : 0; // 2003 English, not noted
+            int battleLayer = HasEnoughArgs(28 + 1)? SafeGetArg(28) : 0; // 2003 English, not noted
+            int flags = HasEnoughArgs(29 + 1)? SafeGetArg(29) : 0; // 2003 English, not noted
+            
+            bool extended = HasEnoughArgs(14 + 1);
             
             if (M.ibMode)
             {
@@ -2224,29 +2886,34 @@ namespace RPGRewriter
         
         string command11120MovePicture() // d6 70
         {
-            int picNum = args[0];
-            bool positionByVariable = (args[1] == 1);
-            int x = args[2];
-            int y = args[3];
-            bool followMap = (args[4] == 1);
-            int zoom = args[5];
-            int topTrans = args[6];
-            int transColor = args[7];
-            int red = args[8];
-            int green = args[9];
-            int blue = args[10];
-            int chroma = args[11];
-            int effect = args[12];
-            int effectValue = args[13];
-            int duration = args[14];
-            bool wait = (args[15] == 1);
-            int bottomTrans = args.Length > 14? args[14] : 0; // 2003
-            bool picNumByVariable = args.Length > 17? (args[17] == 1) : false; // 2003 English
-            // 18 and 19 not used in Move Picture
-            bool zoomByVariable = args.Length > 20? (args[20] == 1) : false; // 2003 English
-            bool topTransByVariable = args.Length > 21? (args[21] == 1) : false; // 2003 English
+            if (!HasEnoughArgs(22))
+            {
+                return "command11120MovePicture: [Error: Invalid arguments]";
+            }
             
-            bool extended = args.Length > 14;
+            int picNum = SafeGetArg(0);
+            bool positionByVariable = (SafeGetArg(1) == 1);
+            int x = SafeGetArg(2);
+            int y = SafeGetArg(3);
+            bool followMap = (SafeGetArg(4) == 1);
+            int zoom = SafeGetArg(5);
+            int topTrans = SafeGetArg(6);
+            int transColor = SafeGetArg(7);
+            int red = SafeGetArg(8);
+            int green = SafeGetArg(9);
+            int blue = SafeGetArg(10);
+            int chroma = SafeGetArg(11);
+            int effect = SafeGetArg(12);
+            int effectValue = SafeGetArg(13);
+            int duration = SafeGetArg(14);
+            bool wait = (SafeGetArg(15) == 1);
+            int bottomTrans = HasEnoughArgs(14 + 1)? SafeGetArg(14) : 0; // 2003
+            bool picNumByVariable = HasEnoughArgs(17 + 1)? (SafeGetArg(17) == 1) : false; // 2003 English
+            // 18 and 19 not used in Move Picture
+            bool zoomByVariable = HasEnoughArgs(20 + 1)? (SafeGetArg(20) == 1) : false; // 2003 English
+            bool topTransByVariable = HasEnoughArgs(21 + 1)? (SafeGetArg(21) == 1) : false; // 2003 English
+            
+            bool extended = HasEnoughArgs(14 + 1);
             
             string picStr = "";
             if (!picNumByVariable)
@@ -2302,19 +2969,29 @@ namespace RPGRewriter
         
         string command11130ErasePicture() // d6 7a
         {
-            int picNum = args[0];
-            int idType = args.Length > 1? args[1] : 0; // 2003 English
-            int max = args.Length > 2? args[2] : 0; // 2003 English
+            if (!HasEnoughArgs(3))
+            {
+                return "command11130ErasePicture: [Error: Invalid arguments]";
+            }
+            
+            int picNum = SafeGetArg(0);
+            int idType = HasEnoughArgs(1 + 1)? SafeGetArg(1) : 0; // 2003 English
+            int max = HasEnoughArgs(2 + 1)? SafeGetArg(2) : 0; // 2003 English
             
             return "Erase Picture: " + picNum;
         }
         
         string command11210ShowAnimation() // d7 4a
         {
-            int anim = args[0];
-            int target = args[1];
-            bool wait = (args[2] == 1);
-            bool fullScreen = (args[3] == 1);
+            if (!HasEnoughArgs(4))
+            {
+                return "Show Animation: [Error: Invalid arguments]";
+            }
+            
+            int anim = SafeGetArg(0);
+            int target = SafeGetArg(1);
+            bool wait = (SafeGetArg(2) == 1);
+            bool fullScreen = (SafeGetArg(3) == 1);
             
             string targetName = M.getTargetEvent(target);
             
@@ -2326,20 +3003,30 @@ namespace RPGRewriter
         
         string command11310SetOpacity() // d8 2e
         {
-            int which = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command11310SetOpacity: [Error: Invalid arguments]";
+            }
+            
+            int which = SafeGetArg(0);
             
             return "Set Hero Opacity: " + (which == 0? "Transparent" : "Normal");
         }
         
         string command11320FlashEvent() // d8 38
         {
-            int target = args[0];
-            int red = args[1];
-            int green = args[2];
-            int blue = args[3];
-            int power = args[4];
-            int time = args[5];
-            bool wait = (args[6] == 1);
+            if (!HasEnoughArgs(7))
+            {
+                return "command11320FlashEvent: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            int red = SafeGetArg(1);
+            int green = SafeGetArg(2);
+            int blue = SafeGetArg(3);
+            int power = SafeGetArg(4);
+            int time = SafeGetArg(5);
+            bool wait = (SafeGetArg(6) == 1);
             
             string targetName = M.getTargetEvent(target);
             
@@ -2378,8 +3065,13 @@ namespace RPGRewriter
         
         string command11410Wait() // d9 12
         {
-            int time = args[0];
-            bool waitForKey = args.Length > 1? (args[1] == 1) : false; // 2003
+            if (!HasEnoughArgs(1))
+            {
+                return "Wait: [Error: Invalid arguments]";
+            }
+            
+            int time = SafeGetArg(0);
+            bool waitForKey = SafeGetArg(1) == 1; // 2003
             
             float sec = time / 10f;
             
@@ -2391,10 +3083,15 @@ namespace RPGRewriter
         
         string command11510Music() // d9 76
         {
-            int fade = args[0];
-            int volume = args[1];
-            int tempo = args[2];
-            int balance = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command11510Music: [Error: Invalid arguments]";
+            }
+            
+            int fade = SafeGetArg(0);
+            int volume = SafeGetArg(1);
+            int tempo = SafeGetArg(2);
+            int balance = SafeGetArg(3);
             
             return "Play Music: " + stringArg + ", Fade " + (fade / 1000) + " sec, "
                 + M.getSoundVTB(volume, tempo, balance);
@@ -2402,7 +3099,12 @@ namespace RPGRewriter
         
         string command11520FadeMusic() // da 00
         {
-            int fade = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command11520FadeMusic: [Error: Invalid arguments]";
+            }
+            
+            int fade = SafeGetArg(0);
             
             return "Fade Out BGM: " + (fade / 1000) + " sec";
         }
@@ -2419,20 +3121,30 @@ namespace RPGRewriter
         
         string command11550Sound() // da 1e
         {
-            int volume = args[0];
-            int tempo = args[1];
-            int balance = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command11550Sound: [Error: Invalid arguments]";
+            }
+            
+            int volume = SafeGetArg(0);
+            int tempo = SafeGetArg(1);
+            int balance = SafeGetArg(2);
             
             return "Play Sound: " + stringArg + ", " + M.getSoundVTB(volume, tempo, balance);
         }
         
         string command11560Movie() // da 28
         {
-            int posType = args[0];
-            int x = args[1];
-            int y = args[2];
-            int width = args[3];
-            int height = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command11560Movie: [Error: Invalid arguments]";
+            }
+            
+            int posType = SafeGetArg(0);
+            int x = SafeGetArg(1);
+            int y = SafeGetArg(2);
+            int width = SafeGetArg(3);
+            int height = SafeGetArg(4);
             
             string posString = "";
             if (posType == 0)
@@ -2446,22 +3158,27 @@ namespace RPGRewriter
         
         string command11610KeyInput() // da 5a
         {
-            int variable = args[0];
-            bool wait = (args[1] == 1);
-            bool dir = (args[2] == 1);
-            bool confirm = (args[3] == 1);
-            bool cancel = (args[4] == 1);
-            bool numKeys = args.Length > 5? (args[5] == 1) : false; // 2003
-            bool opKeys = args.Length > 6? (args[6] == 1) : false; // 2003
-            int timeVariable = args.Length > 7? args[7] : 1; // 2003
-            bool useTimeVariable = args.Length > 8? (args[8] == 1) : false; // 2003
-            bool shift = args.Length > 9? (args[9] == 1) : false; // 2003
-            bool down = args.Length > 10? (args[10] == 1) : dir; // 2003
-            bool left = args.Length > 11? (args[11] == 1) : dir; // 2003
-            bool right = args.Length > 12? (args[12] == 1) : dir; // 2003
-            bool up = args.Length > 13? (args[13] == 1) : dir; // 2003
+            if (!HasEnoughArgs(14))
+            {
+                return "command11610KeyInput: [Error: Invalid arguments]";
+            }
             
-            bool extended = args.Length > 5;
+            int variable = SafeGetArg(0);
+            bool wait = (SafeGetArg(1) == 1);
+            bool dir = (SafeGetArg(2) == 1);
+            bool confirm = (SafeGetArg(3) == 1);
+            bool cancel = (SafeGetArg(4) == 1);
+            bool numKeys = HasEnoughArgs(5 + 1)? (SafeGetArg(5) == 1) : false; // 2003
+            bool opKeys = HasEnoughArgs(6 + 1)? (SafeGetArg(6) == 1) : false; // 2003
+            int timeVariable = HasEnoughArgs(7 + 1)? SafeGetArg(7) : 1; // 2003
+            bool useTimeVariable = HasEnoughArgs(8 + 1)? (SafeGetArg(8) == 1) : false; // 2003
+            bool shift = HasEnoughArgs(9 + 1)? (SafeGetArg(9) == 1) : false; // 2003
+            bool down = HasEnoughArgs(10 + 1)? (SafeGetArg(10) == 1) : dir; // 2003
+            bool left = HasEnoughArgs(11 + 1)? (SafeGetArg(11) == 1) : dir; // 2003
+            bool right = HasEnoughArgs(12 + 1)? (SafeGetArg(12) == 1) : dir; // 2003
+            bool up = HasEnoughArgs(13 + 1)? (SafeGetArg(13) == 1) : dir; // 2003
+            
+            bool extended = HasEnoughArgs(5 + 1);
             
             if (!extended)
                 return "Key Input: Variable " + M.getDataVariable(variable)
@@ -2486,19 +3203,29 @@ namespace RPGRewriter
         
         string command11710ChangeChipSet() // db 3e
         {
-            int chipset = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command11710ChangeChipSet: [Error: Invalid arguments]";
+            }
+            
+            int chipset = SafeGetArg(0);
             
             return "Change ChipSet: " + M.getDataChipSet(chipset);
         }
         
         string command11720ChangeParallax() // db 48
         {
-            bool horz = (args[0] == 1);
-            bool vert = (args[1] == 1);
-            bool horzAuto = (args[2] == 1);
-            int horzSpeed = args[3];
-            bool vertAuto = (args[4] == 1);
-            int vertSpeed = args[5];
+            if (!HasEnoughArgs(6))
+            {
+                return "Change Parallax: " + stringArg + " [Error: Invalid arguments]";
+            }
+            
+            bool horz = (SafeGetArg(0) == 1);
+            bool vert = (SafeGetArg(1) == 1);
+            bool horzAuto = (SafeGetArg(2) == 1);
+            int horzSpeed = SafeGetArg(3);
+            bool vertAuto = (SafeGetArg(4) == 1);
+            int vertSpeed = SafeGetArg(5);
             
             return "Change Parallax: " + stringArg
                 + (horz? (", Horz. Loop" + (horzAuto? " (" + horzSpeed + ")" : "")) : "")
@@ -2507,16 +3234,26 @@ namespace RPGRewriter
         
         string command11740ChangeEncounter() // db 5c
         {
-            int steps = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command11740ChangeEncounter: [Error: Invalid arguments]";
+            }
+            
+            int steps = SafeGetArg(0);
             
             return "Change Encounter Rate: " + steps;
         }
         
         string command11750ChangeChip() // db 66
         {
-            int layer = args[0];
-            int chip1 = args[1];
-            int chip2 = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command11750ChangeChip: [Error: Invalid arguments]";
+            }
+            
+            int layer = SafeGetArg(0);
+            int chip1 = SafeGetArg(1);
+            int chip2 = SafeGetArg(2);
             
             return "Change Chip: "
                 + (layer == 0? "Lower" : "Upper") + ", " + (chip1 + 1) + ", " + (chip2 + 1);
@@ -2524,12 +3261,17 @@ namespace RPGRewriter
         
         string command11810SetTeleport() // dc 22
         {
-            bool delete = (args[0] == 1);
-            int map = args[1];
-            int x = args[2];
-            int y = args[3];
-            bool useSwitch = (args[4] == 1);
-            int switchID = args[5];
+            if (!HasEnoughArgs(6))
+            {
+                return "command11810SetTeleport: [Error: Invalid arguments]";
+            }
+            
+            bool delete = (SafeGetArg(0) == 1);
+            int map = SafeGetArg(1);
+            int x = SafeGetArg(2);
+            int y = SafeGetArg(3);
+            bool useSwitch = (SafeGetArg(4) == 1);
+            int switchID = SafeGetArg(5);
             
             string place = "";
             if (!delete)
@@ -2543,18 +3285,28 @@ namespace RPGRewriter
         
         string command11820DisableTeleport() // dc 2c
         {
-            bool enable = (args[0] == 1);
+            if (!HasEnoughArgs(1))
+            {
+                return "command11820DisableTeleport: [Error: Invalid arguments]";
+            }
+            
+            bool enable = (SafeGetArg(0) == 1);
             
             return "Allow Teleport: " + (enable? "Enable" : "Disable");
         }
         
         string command11830SetEscape() // dc 36
         {
-            int map = args[0];
-            int x = args[1];
-            int y = args[2];
-            bool useSwitch = (args[3] == 1);
-            int switchID = args[4];
+            if (!HasEnoughArgs(5))
+            {
+                return "command11830SetEscape: [Error: Invalid arguments]";
+            }
+            
+            int map = SafeGetArg(0);
+            int x = SafeGetArg(1);
+            int y = SafeGetArg(2);
+            bool useSwitch = (SafeGetArg(3) == 1);
+            int switchID = SafeGetArg(4);
             
             return "Set Escape: " + M.getDataMap(map) + " (" + x + "," + y + ")"
                 + (useSwitch? ", Switch " + M.getDataSwitch(switchID) + " On" : "");
@@ -2562,7 +3314,12 @@ namespace RPGRewriter
         
         string command11840DisableEscape() // dc 40
         {
-            bool enable = (args[0] == 1);
+            if (!HasEnoughArgs(1))
+            {
+                return "command11840DisableEscape: [Error: Invalid arguments]";
+            }
+            
+            bool enable = (SafeGetArg(0) == 1);
             
             return "Allow Escape: " + (enable? "Enable" : "Disable");
         }
@@ -2574,7 +3331,12 @@ namespace RPGRewriter
         
         string command11930DisableSave() // dd 1a
         {
-            bool enable = (args[0] == 1);
+            if (!HasEnoughArgs(1))
+            {
+                return "command11930DisableSave: [Error: Invalid arguments]";
+            }
+            
+            bool enable = (SafeGetArg(0) == 1);
             
             return "Allow Save: " + (enable? "Enable" : "Disable");
         }
@@ -2586,19 +3348,29 @@ namespace RPGRewriter
         
         string command11960DisableMenu() // dd 38
         {
-            bool enable = (args[0] == 1);
+            if (!HasEnoughArgs(1))
+            {
+                return "command11960DisableMenu: [Error: Invalid arguments]";
+            }
+            
+            bool enable = (SafeGetArg(0) == 1);
             
             return "Allow System Menu: " + (enable? "Enable" : "Disable");
         }
         
         string command12010Fork() // dd 6a
         {
-            int type = args[0];
-            int v1 = args[1];
-            int v2 = args[2];
-            int v3 = args[3];
-            int v4 = args[4];
-            bool elseCase = (args[5] == 1);
+            if (!HasEnoughArgs(6))
+            {
+                return "command12010Fork: [Error: Invalid arguments]";
+            }
+            
+            int type = SafeGetArg(0);
+            int v1 = SafeGetArg(1);
+            int v2 = SafeGetArg(2);
+            int v3 = SafeGetArg(3);
+            int v4 = SafeGetArg(4);
+            bool elseCase = (SafeGetArg(5) == 1);
             
             string condition = "";
             if (type == 0) // Switch
@@ -2686,14 +3458,24 @@ namespace RPGRewriter
         
         string command12110Label() // de 4e
         {
-            int label = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command12110Label: [Error: Invalid arguments]";
+            }
+            
+            int label = SafeGetArg(0);
             
             return "Label: " + label;
         }
         
         string command12120LabelJump() // de 58
         {
-            int label = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command12120LabelJump: [Error: Invalid arguments]";
+            }
+            
+            int label = SafeGetArg(0);
             
             return "Go To Label: " + label;
         }
@@ -2725,9 +3507,14 @@ namespace RPGRewriter
         
         string command12330CallEvent() // e0 2a
         {
-            int type = args[0];
-            int value1 = args[1];
-            int value2 = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command12330CallEvent: [Error: Invalid arguments]";
+            }
+            
+            int type = SafeGetArg(0);
+            int value1 = SafeGetArg(1);
+            int value2 = SafeGetArg(2);
             
             string eventStr = "";
             if (type == 0) // Common
@@ -2762,11 +3549,16 @@ namespace RPGRewriter
         
         string command13110ChangeEnemyHP() // e6 36
         {
-            int target = args[0];
-            bool subtract = (args[1] == 1);
-            bool byVariable = (args[2] == 1);
-            int value = args[3];
-            bool canDie = (args[4] == 1);
+            if (!HasEnoughArgs(5))
+            {
+                return "command13110ChangeEnemyHP: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            bool subtract = (SafeGetArg(1) == 1);
+            bool byVariable = (SafeGetArg(2) == 1);
+            int value = SafeGetArg(3);
+            bool canDie = (SafeGetArg(4) == 1);
             
             return "Change Enemy HP: "
                 + "Enemy " + (target + 1) + ", "
@@ -2777,10 +3569,15 @@ namespace RPGRewriter
         
         string command13120ChangeEnemyMP() // e6 40
         {
-            int target = args[0];
-            bool subtract = (args[1] == 1);
-            bool byVariable = (args[2] == 1);
-            int value = args[3];
+            if (!HasEnoughArgs(4))
+            {
+                return "command13120ChangeEnemyMP: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            bool subtract = (SafeGetArg(1) == 1);
+            bool byVariable = (SafeGetArg(2) == 1);
+            int value = SafeGetArg(3);
             
             return "Change Enemy MP: "
                 + "Enemy " + (target + 1) + ", "
@@ -2790,9 +3587,14 @@ namespace RPGRewriter
         
         string command13130ChangeEnemyState() // e6 4a
         {
-            int target = args[0];
-            bool cure = (args[1] == 1);
-            int condition = args[2];
+            if (!HasEnoughArgs(3))
+            {
+                return "command13130ChangeEnemyState: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
+            bool cure = (SafeGetArg(1) == 1);
+            int condition = SafeGetArg(2);
             
             return "Change State: "
                 + "Enemy " + (target + 1) + ", "
@@ -2802,7 +3604,12 @@ namespace RPGRewriter
         
         string command13150EnemyAppear() // e6 5e
         {
-            int target = args[0];
+            if (!HasEnoughArgs(1))
+            {
+                return "command13150EnemyAppear: [Error: Invalid arguments]";
+            }
+            
+            int target = SafeGetArg(0);
             
             return "Enemy Appear: Enemy " + (target + 1);
         }
@@ -2814,9 +3621,14 @@ namespace RPGRewriter
         
         string command13260BattleAnimation() // e7 4c
         {
-            int animation = args[0];
-            int target = args[1];
-            bool wait = (args[2] == 1);
+            if (!HasEnoughArgs(3))
+            {
+                return "command13260BattleAnimation: [Error: Invalid arguments]";
+            }
+            
+            int animation = SafeGetArg(0);
+            int target = SafeGetArg(1);
+            bool wait = (SafeGetArg(2) == 1);
             
             return "Show Battle Animation: " + M.getDataAnimation(animation) + ", "
                 + (target == -1? "All Enemies" : "Enemy " + (target + 1)
@@ -2825,12 +3637,17 @@ namespace RPGRewriter
         
         string command13310BattleFork() // e7 7e
         {
-            int type = args[0];
-            int v1 = args[1];
-            int v2 = args[2];
-            int v3 = args[3];
-            int v4 = args[4];
-            bool elseCase = (args[5] == 1);
+            if (!HasEnoughArgs(6))
+            {
+                return "command13310BattleFork: [Error: Invalid arguments]";
+            }
+            
+            int type = SafeGetArg(0);
+            int v1 = SafeGetArg(1);
+            int v2 = SafeGetArg(2);
+            int v3 = SafeGetArg(3);
+            int v4 = SafeGetArg(4);
+            bool elseCase = (SafeGetArg(5) == 1);
             
             string condition = "";
             if (type == 0) // Switch
@@ -2881,6 +3698,188 @@ namespace RPGRewriter
         string command13410StopBattle() // e8 62
         {
             return "Stop Battle";
+        }
+
+        string command3001ManiacsUnknown()
+        {
+            if (!HasEnoughArgs(1))
+            {
+                return "command3001ManiacsUnknown: [Error: Invalid arguments]";
+            }
+                    
+            // 根据错误信息，这个命令有12个参数
+            string result = "Maniacs Script 3001: ";
+            if (args != null && HasEnoughArgs(0 + 1))
+            {
+                result += "Target:" + SafeGetArg(0);
+                for (int i = 1; i < args.Length && i < 12; i++)
+                {
+                    result += ", arg" + i + ":" + args[i];
+                }
+            }
+            return result;
+        }
+
+        string command3003ManiacsUnknown()
+        {
+            if (!HasEnoughArgs(1))
+            {
+                return "command3003ManiacsUnknown: [Error: Invalid arguments]";
+            }
+            
+            // 根据错误信息，这个命令有2个参数
+            string result = "Maniacs Script 3003: ";
+            if (args != null && HasEnoughArgs(0 + 1))
+            {
+                result += "Target:" + SafeGetArg(0);
+                for (int i = 1; i < args.Length && i < 2; i++)
+                {
+                    result += ", arg" + i + ":" + args[i];
+                }
+            }
+            return result;
+        }
+
+        string command3002ManiacsExecuteSave()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Execute Save (3002): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：存档槽位?)
+        }
+
+        string command3004ManiacsEndLoadProcessing()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs End Load Processing (3004): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义
+        }
+
+        string command3006ManiacsSetMouseCoords()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Set Mouse Coordinates (3006): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：X坐标, Y坐标, 是否变量?)
+        }
+
+        string command3009ManiacsControlBattleProcessing()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Control Battle Processing (3009): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：控制类型, 目标, 值?)
+        }
+
+        string command3010ManiacsOperateATBGauge()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Operate ATB Gauge (3010): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：目标(敌/我), 操作类型, 值?)
+        }
+
+        string command3011ManiacsChangeBattleCommandEX()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Change Battle Command EX (3011): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：角色, 命令槽位, 新命令ID, 添加/移除?)
+        }
+
+        string command3012ManiacsGetBattleInfo()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Get Battle Information (3012): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：信息类型, 目标变量?)
+        }
+
+        string command3015ManiacsRewriteMap()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Rewrite Map (3015): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：图层, X, Y, 宽度, 高度, 新图块ID, 是否变量?)
+        }
+
+        string command3017ManiacsChangePictureID()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Change Picture ID (3017): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：原ID, 新ID, 范围?)
+        }
+
+        string command3019ManiacsCallCommand()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Call Command (3019): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：目标指令代码, 参数?)
+        }
+
+        string command3020ManiacsOperateStringVariables()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Operate String Variables (3020): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：目标变量, 操作类型, 源/值, 范围?)
+        }
+
+        string command3027ManiacsAddCharacterAction()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Add Character Action (3027): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (可能类似移动路线，结构复杂?)
+        }
+
+        string command3028ManiacsPictureEditChip()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Picture Edit (Chip) (3028): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：目标图片ID, X, Y, 图块ID?)
+        }
+
+        string command3029ManiacsControlTextProcessing()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Control Text Processing (3029): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：设置项, 新值?)
+        }
+
+        string command3030ManiacsScriptLine1()
+        {
+            // 通常脚本指令的第一行包含脚本内容
+            return $"Maniacs Script (Line 1) (3030): {stringArg}";
+            // Args 通常为空或有特殊用途
+        }
+
+        string command3031ManiacsScriptLine2Plus()
+        {
+            // 脚本指令的后续行
+            return $"Maniacs Script (Line 2+) (3031): {stringArg}";
+             // Args 通常为空或有特殊用途
+        }
+
+        string command3032ManiacsScreenZoom()
+        {
+            string argString = GetArgStringForPlaceholder();
+            return $"Maniacs Screen Zoom (3032): Str='{stringArg}', Args=[{argString}]";
+            // TODO: 根据文档解析 args 参数含义 (例如：缩放比例, 中心X, 中心Y, 时间, 等待?)
+        }
+
+        string command3033ManiacsConsole()
+        {
+             string argString = GetArgStringForPlaceholder();
+            // 可能用于向游戏内控制台输出信息
+            return $"Maniacs Console (3033): Message='{stringArg}', Args=[{argString}]";
+        }
+
+        // 辅助方法，用于生成参数占位符字符串
+        private string GetArgStringForPlaceholder()
+        {
+            if (args == null || args.Length == 0)
+            {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < args.Length; i++)
+            {
+                sb.Append(i > 0 ? ", " : "");
+                sb.Append($"Arg{i}:{args[i]}");
+            }
+            return sb.ToString();
         }
         
         // Replaces stringArg. Returns whether the new one differs from the original.
@@ -3032,6 +4031,11 @@ namespace RPGRewriter
             return opcode == 0;
         }
         
+        public bool isManiacsNoOp()
+        {
+            return opcode == C_MANIACS_NOP;
+        }
+        
         // Returns whether the command is a textbox-starting Message command, not a Message Follow or an extra box with a dummy argument added by the program.
         public bool isMessageStart()
         {
@@ -3102,10 +4106,170 @@ namespace RPGRewriter
             return opcode == C_SHOWSTRINGPICTURE;
         }
         
+        public bool isManiacsCallCommand()
+        {
+            return opcode == C_MANIACS3019;
+        }
+        
+        public bool isManiacsStringVariable()
+        {
+            return opcode == C_MANIACS3020;
+        }
+        
+        public bool isManiacsScriptLine()
+        {
+            return opcode == C_MANIACS3030 || opcode == C_MANIACS3031;
+        }
+        
         // Returns whether the command is a blank command (with or without a marking argument).
         public bool isBlank()
         {
             return opcode == C_BLANK;
         }
+
+        // 将字符串中的非ASCII字符转换为 uXXXX 形式，保留ASCII字符不变。
+        // 用于尝试匹配磁盘上可能已存在的“ASCII转义”系统文件名（例如：戦闘 -> u6226u95d8）。
+        static string buildAsciiUEscapedName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return name;
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in name)
+            {
+                if (c <= 0x7F)
+                    sb.Append(c);
+                else
+                    sb.Append('u').Append(((int)c).ToString("x4"));
+            }
+            return sb.ToString();
+        }
+
+        // Helper: perform System filename replacement using mapping or on-disk ascii-escaped fallback.
+        static string ReplaceSystemBaseName(string baseName)
+        {
+            string name = Path.GetFileName(baseName.Trim());
+            if (string.IsNullOrEmpty(name)) return baseName;
+            string replaced = M.rewriteString(M.M_SYSTEM, name);
+            if (replaced == name)
+            {
+                // Try ascii-escaped fallback if such a file exists physically
+                string asciiCandidate = buildAsciiUEscapedName(name);
+                try
+                {
+                    string sysDir = M.gamePath + "\\" + M.FOLDER[M.M_SYSTEM];
+                    if (Directory.Exists(sysDir))
+                    {
+                        DirectoryInfo root = new DirectoryInfo(sysDir);
+                        if (root.GetFiles(asciiCandidate + ".*").Length > 0)
+                            replaced = asciiCandidate;
+                    }
+                }
+                catch { }
+            }
+            return replaced;
+        }
+
+        // Map of folder name -> M mode index for filename rewriting/checking.
+        static readonly Dictionary<string, int> FolderModeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Backdrop", M.M_BACKDROP },
+            { "Battle", M.M_BATTLE },
+            { "Battle2", M.M_BATTLE2 },
+            { "BattleCharSet", M.M_BATTLECHARSET },
+            { "BattleWeapon", M.M_BATTLEWEAPON },
+            { "CharSet", M.M_CHARSET },
+            { "ChipSet", M.M_CHIPSET },
+            { "FaceSet", M.M_FACESET },
+            { "Frame", M.M_FRAME },
+            { "GameOver", M.M_GAMEOVER },
+            { "Monster", M.M_MONSTER },
+            { "Movie", M.M_MOVIE },
+            { "Music", M.M_MUSIC },
+            { "Panorama", M.M_PANORAMA },
+            { "Picture", M.M_PICTURE },
+            { "Sound", M.M_SOUND },
+            { "System", M.M_SYSTEM },
+            { "System2", M.M_SYSTEM2 },
+            { "Title", M.M_TITLE },
+        };
+
+        // Generic base-name replacer for any asset folder using mapping or ascii-escaped fallback.
+        static string ReplaceBaseNameForFolder(string folder, string baseName)
+        {
+            if (!FolderModeMap.TryGetValue(folder, out int mode))
+                return baseName;
+
+            string name = Path.GetFileName(baseName.Trim());
+            if (string.IsNullOrEmpty(name)) return baseName;
+
+            string replaced = M.rewriteString(mode, name);
+            if (replaced == name)
+            {
+                string asciiCandidate = buildAsciiUEscapedName(name);
+                try
+                {
+                    string dir = M.gamePath + "\\" + M.FOLDER[mode];
+                    if (Directory.Exists(dir))
+                    {
+                        DirectoryInfo root = new DirectoryInfo(dir);
+                        if (root.GetFiles(asciiCandidate + ".*").Length > 0)
+                            replaced = asciiCandidate;
+                    }
+                }
+                catch { }
+            }
+            return replaced;
+        }
+
+        // Rewrites embedded resource paths like "../CharSet/NAME" or "Picture\\NAME" in free-form Maniacs strings.
+        static string RewriteEmbeddedResourcePaths(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+
+            // (?i) case-insensitive; optional ../ or .\; folder from known set; slash or backslash; capture base name
+            string pattern = @"(?i)(?<rel>(?:\.\./|\.\\)?)" +
+                             @"(?<folder>Backdrop|Battle|Battle2|BattleCharSet|BattleWeapon|CharSet|ChipSet|FaceSet|Frame|GameOver|Monster|Movie|Music|Panorama|Picture|Sound|System2?|Title)" +
+                             @"[\\/]+(?<name>[^ \t\r\n/\\]+)";
+
+            string updated = Regex.Replace(text, pattern, match =>
+            {
+                string rel = match.Groups["rel"].Value; // preserve relative prefix (e.g., ../)
+                string folder = match.Groups["folder"].Value;
+                string baseName = match.Groups["name"].Value;
+
+                if (M.globalMode == "Checking")
+                {
+                    if (FolderModeMap.TryGetValue(folder, out int mode))
+                        M.checkStringValidForMode(baseName, mode);
+                    return match.Value; // do not alter in Checking
+                }
+
+                if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                {
+                    string replaced = ReplaceBaseNameForFolder(folder, baseName);
+                    if (replaced != baseName)
+                        M.changesMade = true;
+                    // Normalize separator to '/'
+                    return rel + folder + "/" + replaced;
+                }
+                return match.Value;
+            });
+
+            return updated;
+        }
+
+        // 安全地访问args数组，如果索引越界返回默认值
+        private int SafeGetArg(int index, int defaultValue = 0)
+        {
+            if (args == null || index < 0 || index >= args.Length)
+                return defaultValue;
+            return args[index];
+        }
+        
+        // 检查args数组是否至少有指定数量的元素
+        private bool HasEnoughArgs(int count)
+        {
+            return args != null && args.Length >= count;
+        }
     }
 }
+
