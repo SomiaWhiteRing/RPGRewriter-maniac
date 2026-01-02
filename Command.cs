@@ -2,6 +2,7 @@
 using System.Text;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Collections.Generic;
 
 namespace RPGRewriter
 {
@@ -278,6 +279,28 @@ namespace RPGRewriter
                 for (int i = 0; i < argCount; i++)
                     args[i] = M.readMultibyte(f);
 
+                // First pass: rewrite any embedded resource paths in all opcodes (handles ../CharSet/NAME, etc.)
+                try
+                {
+                    if (!string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            string rewritten = RewriteEmbeddedResourcePaths(stringArg);
+                            if (!ReferenceEquals(rewritten, stringArg) && rewritten != stringArg)
+                            {
+                                stringArg = rewritten;
+                                M.changesMade = true;
+                            }
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            RewriteEmbeddedResourcePaths(stringArg); // 内部触发检查
+                        }
+                    }
+                }
+                catch { }
+
                 // Special-case: Maniacs 2003 "Show String Picture" (3007)
                 // The stringArg layout is: 0x01 + [display text] + 0x01 + [font] + 0x01 + [system graphic filename]
                 // - In Rewriting mode: rewrite the embedded System filename segment using the normal replacement list.
@@ -355,121 +378,71 @@ namespace RPGRewriter
                     // Swallow parsing errors; this is a best-effort checker and must not affect normal loading.
                 }
 
-                // Maniacs 3029: Control Text Processing — 有些工程在此内嵌 System 文件名
+                // Maniacs 3029: Control Text Processing — 有些工程在此内嵌资源路径（System/CharSet/…，可带 ../）
                 try
                 {
                     if (opcode == C_MANIACS3029 && !string.IsNullOrEmpty(stringArg))
                     {
                         if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
                         {
-                            string updated = stringArg;
-
-                            // Pattern A: System/<filename>
-                            updated = Regex.Replace(updated, @"(?i)System/([^ \t\r\n/\\]+)", match =>
-                            {
-                                string baseName = match.Groups[1].Value;
-                                string replaced = ReplaceSystemBaseName(baseName);
-                                if (replaced != baseName)
-                                    M.changesMade = true;
-                                return "System/" + replaced;
-                            });
-
-                            // Pattern B: 以 System 开头的独立 token，且包含非 ASCII（已是英文名则跳过）
-                            updated = Regex.Replace(updated, @"(?<![A-Za-z0-9_/\\-])(System[^\x00-\x1F\x7F\s/\\]+)", match =>
-                            {
-                                string token = match.Groups[1].Value;
-                                bool hasNonAscii = false;
-                                foreach (char c in token) { if (c > 0x7F) { hasNonAscii = true; break; } }
-                                if (!hasNonAscii)
-                                    return token;
-                                string replaced = ReplaceSystemBaseName(token);
-                                if (replaced != token)
-                                    M.changesMade = true;
-                                return replaced;
-                            });
-
-                            stringArg = updated;
+                            stringArg = RewriteEmbeddedResourcePaths(stringArg);
                         }
                         else if (M.globalMode == "Checking")
                         {
-                            foreach (Match m in Regex.Matches(stringArg, @"(?i)System/([^ \t\r\n/\\]+)"))
-                            {
-                                string name = m.Groups[1].Value;
-                                if (!string.IsNullOrEmpty(name))
-                                    M.checkStringValidForMode(name, M.M_SYSTEM);
-                            }
+                            RewriteEmbeddedResourcePaths(stringArg); // 内部会调用 checkStringValidForMode
                         }
                     }
                 }
                 catch { }
 
-                // Maniacs 3019: Call Command — 有些工程把命令及其参数写在 stringArg，中可能直接出现 System 引用
+                // Maniacs 3019: Call Command — 有些工程把命令及其参数写在 stringArg，中可能直接出现资源路径引用
                 try
                 {
                     if (opcode == C_MANIACS3019 && !string.IsNullOrEmpty(stringArg))
                     {
                         if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
                         {
-                            string updated = stringArg;
-                            // 支持两种常见样式：System/<name> 与以 System 开头的非 ASCII token
-                            updated = Regex.Replace(updated, @"(?i)System[\\/]+([^ \t\r\n/\\]+)", match =>
-                            {
-                                string baseName = match.Groups[1].Value;
-                                string replaced = ReplaceSystemBaseName(baseName);
-                                if (replaced != baseName) M.changesMade = true;
-                                return "System/" + replaced; // 统一写成正斜杠
-                            });
-
-                            updated = Regex.Replace(updated, @"(?<![A-Za-z0-9_/\\-])(System[^\x00-\x1F\x7F\s/\\]+)", match =>
-                            {
-                                string token = match.Groups[1].Value;
-                                bool hasNonAscii = false; foreach (char c in token) { if (c > 0x7F) { hasNonAscii = true; break; } }
-                                if (!hasNonAscii) return token;
-                                string replaced = ReplaceSystemBaseName(token);
-                                if (replaced != token) M.changesMade = true;
-                                return replaced;
-                            });
-
-                            stringArg = updated;
+                            stringArg = RewriteEmbeddedResourcePaths(stringArg);
                         }
                         else if (M.globalMode == "Checking")
                         {
-                            foreach (Match m in Regex.Matches(stringArg, @"(?i)System[\\/]+([^ \t\r\n/\\]+)"))
-                            {
-                                string name = m.Groups[1].Value;
-                                if (!string.IsNullOrEmpty(name))
-                                    M.checkStringValidForMode(name, M.M_SYSTEM);
-                            }
+                            RewriteEmbeddedResourcePaths(stringArg);
                         }
                     }
                 }
                 catch { }
 
-                // Maniacs 3030/3031: Script lines — 可能直接出现 System/<name> 引用
+                // Maniacs 3030/3031: Script lines — 可能直接出现资源路径引用
                 try
                 {
                     if ((opcode == C_MANIACS3030 || opcode == C_MANIACS3031) && !string.IsNullOrEmpty(stringArg))
                     {
                         if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
                         {
-                            string updated = Regex.Replace(stringArg, @"(?i)System/([^ \t\r\n/\\]+)", match =>
-                            {
-                                string baseName = match.Groups[1].Value;
-                                string replaced = ReplaceSystemBaseName(baseName);
-                                if (replaced != baseName)
-                                    M.changesMade = true;
-                                return "System/" + replaced;
-                            });
-                            if (!ReferenceEquals(updated, stringArg))
-                                stringArg = updated;
+                            stringArg = RewriteEmbeddedResourcePaths(stringArg);
                         }
                         else if (M.globalMode == "Checking")
                         {
-                            foreach (Match m in Regex.Matches(stringArg, @"(?i)System/([^ \t\r\n/\\]+)"))
+                            RewriteEmbeddedResourcePaths(stringArg);
+                        }
+                    }
+                }
+                catch { }
+
+                // Generic Maniacs fallback: rewrite any embedded resource paths in stringArg (e.g., ../CharSet/NAME)
+                try
+                {
+                    if (!string.IsNullOrEmpty(stringArg))
+                    {
+                        bool isManiacsOpcode = (opcode >= 3000 && opcode < 5100);
+                        if (isManiacsOpcode)
+                        {
+                            string rewritten = RewriteEmbeddedResourcePaths(stringArg);
+                            if (!ReferenceEquals(rewritten, stringArg) && rewritten != stringArg)
                             {
-                                string name = m.Groups[1].Value;
-                                if (!string.IsNullOrEmpty(name))
-                                    M.checkStringValidForMode(name, M.M_SYSTEM);
+                                stringArg = rewritten;
+                                if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                                    M.changesMade = true;
                             }
                         }
                     }
@@ -4195,6 +4168,95 @@ namespace RPGRewriter
             return replaced;
         }
 
+        // Map of folder name -> M mode index for filename rewriting/checking.
+        static readonly Dictionary<string, int> FolderModeMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Backdrop", M.M_BACKDROP },
+            { "Battle", M.M_BATTLE },
+            { "Battle2", M.M_BATTLE2 },
+            { "BattleCharSet", M.M_BATTLECHARSET },
+            { "BattleWeapon", M.M_BATTLEWEAPON },
+            { "CharSet", M.M_CHARSET },
+            { "ChipSet", M.M_CHIPSET },
+            { "FaceSet", M.M_FACESET },
+            { "Frame", M.M_FRAME },
+            { "GameOver", M.M_GAMEOVER },
+            { "Monster", M.M_MONSTER },
+            { "Movie", M.M_MOVIE },
+            { "Music", M.M_MUSIC },
+            { "Panorama", M.M_PANORAMA },
+            { "Picture", M.M_PICTURE },
+            { "Sound", M.M_SOUND },
+            { "System", M.M_SYSTEM },
+            { "System2", M.M_SYSTEM2 },
+            { "Title", M.M_TITLE },
+        };
+
+        // Generic base-name replacer for any asset folder using mapping or ascii-escaped fallback.
+        static string ReplaceBaseNameForFolder(string folder, string baseName)
+        {
+            if (!FolderModeMap.TryGetValue(folder, out int mode))
+                return baseName;
+
+            string name = Path.GetFileName(baseName.Trim());
+            if (string.IsNullOrEmpty(name)) return baseName;
+
+            string replaced = M.rewriteString(mode, name);
+            if (replaced == name)
+            {
+                string asciiCandidate = buildAsciiUEscapedName(name);
+                try
+                {
+                    string dir = M.gamePath + "\\" + M.FOLDER[mode];
+                    if (Directory.Exists(dir))
+                    {
+                        DirectoryInfo root = new DirectoryInfo(dir);
+                        if (root.GetFiles(asciiCandidate + ".*").Length > 0)
+                            replaced = asciiCandidate;
+                    }
+                }
+                catch { }
+            }
+            return replaced;
+        }
+
+        // Rewrites embedded resource paths like "../CharSet/NAME" or "Picture\\NAME" in free-form Maniacs strings.
+        static string RewriteEmbeddedResourcePaths(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+
+            // (?i) case-insensitive; optional ../ or .\; folder from known set; slash or backslash; capture base name
+            string pattern = @"(?i)(?<rel>(?:\.\./|\.\\)?)" +
+                             @"(?<folder>Backdrop|Battle|Battle2|BattleCharSet|BattleWeapon|CharSet|ChipSet|FaceSet|Frame|GameOver|Monster|Movie|Music|Panorama|Picture|Sound|System2?|Title)" +
+                             @"[\\/]+(?<name>[^ \t\r\n/\\]+)";
+
+            string updated = Regex.Replace(text, pattern, match =>
+            {
+                string rel = match.Groups["rel"].Value; // preserve relative prefix (e.g., ../)
+                string folder = match.Groups["folder"].Value;
+                string baseName = match.Groups["name"].Value;
+
+                if (M.globalMode == "Checking")
+                {
+                    if (FolderModeMap.TryGetValue(folder, out int mode))
+                        M.checkStringValidForMode(baseName, mode);
+                    return match.Value; // do not alter in Checking
+                }
+
+                if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                {
+                    string replaced = ReplaceBaseNameForFolder(folder, baseName);
+                    if (replaced != baseName)
+                        M.changesMade = true;
+                    // Normalize separator to '/'
+                    return rel + folder + "/" + replaced;
+                }
+                return match.Value;
+            });
+
+            return updated;
+        }
+
         // 安全地访问args数组，如果索引越界返回默认值
         private int SafeGetArg(int index, int defaultValue = 0)
         {
@@ -4210,3 +4272,4 @@ namespace RPGRewriter
         }
     }
 }
+
