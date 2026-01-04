@@ -20,6 +20,8 @@ namespace RPGRewriter
         
         int moveRouteTarget;
         int moveRouteFreq;
+        byte moveRouteRepeatRaw;
+        byte moveRouteSkipRaw;
         bool moveRouteRepeat;
         bool moveRouteSkip;
         MoveRoute moveRoute;
@@ -489,8 +491,10 @@ namespace RPGRewriter
                 
                 moveRouteTarget = M.readMultibyte(f);
                 moveRouteFreq = M.readByte(f);
-                moveRouteRepeat = (M.readByte(f) == 1);
-                moveRouteSkip = (M.readByte(f) == 1);
+                moveRouteRepeatRaw = M.readByte(f);
+                moveRouteSkipRaw = M.readByte(f);
+                moveRouteRepeat = moveRouteRepeatRaw == 1;
+                moveRouteSkip = moveRouteSkipRaw == 1;
                 lengthTemp -= 4;
                 
                 moveRoute = new MoveRoute(f, lengthTemp, "Move");
@@ -3938,8 +3942,9 @@ namespace RPGRewriter
                 
                 M.writeMultibyte(moveRouteTarget);
                 M.writeByte(moveRouteFreq);
-                M.writeByte(moveRouteRepeat? 1 : 0);
-                M.writeByte(moveRouteSkip? 1 : 0);
+                // Preserve raw bytes to avoid losing non-0/1 flag encodings observed in some projects.
+                M.writeByte(moveRouteRepeatRaw != 0? moveRouteRepeatRaw : (moveRouteRepeat? 1 : 0));
+                M.writeByte(moveRouteSkipRaw != 0? moveRouteSkipRaw : (moveRouteSkip? 1 : 0));
                 
                 moveRoute.write();
             }
