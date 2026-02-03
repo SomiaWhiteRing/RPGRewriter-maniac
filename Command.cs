@@ -1356,9 +1356,9 @@ namespace RPGRewriter
             bool showLevelUp = (SafeGetArg(6) == 1);
             
             return "Change Class: " + M.getDataHero(hero) + " to " + M.getDataClass(classID) + ", "
-                + classChangeLevel[levelBehavior] + ", "
-                + classChangeSkills[skillBehavior] + ", "
-                + classChangeStats[statBehavior]
+                + SafeLabel(classChangeLevel, levelBehavior) + ", "
+                + SafeLabel(classChangeSkills, skillBehavior) + ", "
+                + SafeLabel(classChangeStats, statBehavior)
                 + (showLevelUp? " (Show Level Up)" : "");
         }
         
@@ -1620,7 +1620,7 @@ namespace RPGRewriter
             
             return "Message Options: "
                 + (!transparent? "Normal" : "Transparent") + ", "
-                + messagePositions[position]
+                + SafeLabel(messagePositions, position)
                 + (dontCoverHero? ", Avoid Covering Hero" : "")
                 + (continueEvents? ", Let Events Continue" : ", Stop Events");
         }
@@ -1857,7 +1857,7 @@ namespace RPGRewriter
             else if (operand == 8) // Enemy (In Battle)
                 rightSide = "Enemy " + (value + 1) + "'s " + SafeLabel(enemyStats, value2);
             
-            return "Change Variable: " + variableName + " " + operations[operation] + " " + rightSide;
+            return "Change Variable: " + variableName + " " + SafeLabel(operations, operation) + " " + rightSide;
         }
         
         string command10230Timer() // cf 76
@@ -2017,7 +2017,7 @@ namespace RPGRewriter
             
             return "Change Stats: "
                 + targetName + ", "
-                + basicStats[stat] + " "
+                + SafeLabel(basicStats, stat) + " "
                 + (minus? "-" : "+") + " "
                 + (!byVariable? value2.ToString() : "Variable " + M.getDataVariable(value2));
         }
@@ -2067,7 +2067,7 @@ namespace RPGRewriter
                 equipmentOrSlot = (type == 0? M.getDataItem(value2) : "Item at Variable " + M.getDataVariable(value2));
             }
             else
-                equipmentOrSlot = equipTypes[type];
+                equipmentOrSlot = SafeLabel(equipTypes, type);
             
             return "Change Equipment: "
                 + targetName + ", "
@@ -2263,7 +2263,7 @@ namespace RPGRewriter
             int tempo = SafeGetArg(3);
             int balance = SafeGetArg(4);
             
-            return "Change System BGM: " + systemBGMs[song] + ", " + stringArg
+            return "Change System BGM: " + SafeLabel(systemBGMs, song) + ", " + stringArg
                 + ", Fade " + (fade / 1000) + " sec, "
                 + M.getSoundVTB(volume, tempo, balance);
         }
@@ -2280,7 +2280,7 @@ namespace RPGRewriter
             int tempo = SafeGetArg(2);
             int balance = SafeGetArg(3);
             
-            return "Change System Sound: " + systemSounds[sound] + ", " + stringArg + ", "
+            return "Change System Sound: " + SafeLabel(systemSounds, sound) + ", " + stringArg + ", "
                 + M.getSoundVTB(volume, tempo, balance);
         }
         
@@ -2315,7 +2315,7 @@ namespace RPGRewriter
             else if (transition == 1 || transition == 3 || transition == 5)
                 effectStr = M.getShowEffects(effect);
             
-            return "Change Transition: " + transitions[transition] + ", " + effectStr;
+            return "Change Transition: " + SafeLabel(transitions, transition) + ", " + effectStr;
         }
         
         string command10710BattleStart() // d3 56
@@ -2340,7 +2340,7 @@ namespace RPGRewriter
             string specialConditionStr = "", bgString = "";
             if (extended)
             {
-                specialConditionStr = specialBattleTypes[specialBattleType] + ", ";
+                specialConditionStr = SafeLabel(specialBattleTypes, specialBattleType) + ", ";
                 if (bgType == 0)
                     bgString = "Default";
                 else if (bgType == 1)
@@ -2774,7 +2774,7 @@ namespace RPGRewriter
             int power = SafeGetArg(1);
             
             return "Call Weather: "
-                + weathers[weather]
+                + SafeLabel(weathers, weather)
                 + (weather != 0? ", " + (power == 0? "Low" : power == 1? "Medium" : "High") : "");
         }
         
@@ -3386,7 +3386,7 @@ namespace RPGRewriter
             {
                 // v1: Variable 1, v2: Fixed or Variable?, v3: Variable 2/Value, v4: Comparison
                 string rightSide = (v2 == 0? v3.ToString() : "Variable " + M.getDataVariable(v3));
-                condition = "Variable " + M.getDataVariable(v1) + " " + comparisons[v4] + " " + rightSide;
+                condition = "Variable " + M.getDataVariable(v1) + " " + SafeLabel(comparisons, v4) + " " + rightSide;
             }
             else if (type == 2) // Timer
             {
@@ -3663,7 +3663,7 @@ namespace RPGRewriter
             {
                 // v1: Variable 1, v2: Fixed or Variable?, v3: Variable 2/Value, v4: Comparison
                 string rightSide = (v2 == 0? v3.ToString() : "Variable " + M.getDataVariable(v3));
-                condition = "Variable " + M.getDataVariable(v1) + " " + comparisons[v4] + " " + rightSide;
+                condition = "Variable " + M.getDataVariable(v1) + " " + SafeLabel(comparisons, v4) + " " + rightSide;
             }
             else if (type == 2) // Hero Can Act
             {
