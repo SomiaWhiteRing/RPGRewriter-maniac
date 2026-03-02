@@ -879,6 +879,15 @@ namespace RPGRewriter
             string code = "";
             bool readProjectFilenames = false;
             
+            // Track whether encoding-related args were explicitly set (to warn about common confusion:
+            // -writecode/-readcode only affect "to translate" strings, not filenames, unless -file(write/read)code is also set).
+            bool cmdSetMainRead = false;
+            bool cmdSetMainWrite = false;
+            bool cmdSetFileRead = false;
+            bool cmdSetFileWrite = false;
+            bool cmdSetMiscRead = false;
+            bool cmdSetMiscWrite = false;
+            
             for (int i = 0; i < args.Length; i++)
             {
                 string arg = args[i];
@@ -977,12 +986,12 @@ namespace RPGRewriter
                                 case "r": case "gamemode": cmdGameMode = num; break;
                                 case "nolimit": ignoreLengthLimits = num; break;
                                 case "forceversion": forceEngineVersion = num; break;
-                                case "readcode": tryToSetReadEncoding(num, S_TOTRANSLATE); break;
-                                case "writecode": tryToSetWriteEncoding(num, S_TOTRANSLATE); break;
-                                case "filereadcode": tryToSetReadEncoding(num, S_FILENAME); break;
-                                case "filewritecode": tryToSetWriteEncoding(num, S_FILENAME); break;
-                                case "miscreadcode": tryToSetReadEncoding(num, S_UNTRANSLATED); break;
-                                case "miscwritecode": tryToSetWriteEncoding(num, S_UNTRANSLATED); break;
+                                case "readcode": tryToSetReadEncoding(num, S_TOTRANSLATE); cmdSetMainRead = true; break;
+                                case "writecode": tryToSetWriteEncoding(num, S_TOTRANSLATE); cmdSetMainWrite = true; break;
+                                case "filereadcode": tryToSetReadEncoding(num, S_FILENAME); cmdSetFileRead = true; break;
+                                case "filewritecode": tryToSetWriteEncoding(num, S_FILENAME); cmdSetFileWrite = true; break;
+                                case "miscreadcode": tryToSetReadEncoding(num, S_UNTRANSLATED); cmdSetMiscRead = true; break;
+                                case "miscwritecode": tryToSetWriteEncoding(num, S_UNTRANSLATED); cmdSetMiscWrite = true; break;
                             }
                         }
                         
@@ -999,6 +1008,31 @@ namespace RPGRewriter
             
             if (commandLineFunction == "") // No function was explicitly set
                 commandLineFunction = "z";
+            
+            // Warn about encoding mismatch pitfalls when user only sets -writecode/-readcode.
+            // This is especially important for -import/-rewrite because the program will re-save maps/db and may corrupt
+            // resource references if filenames are decoded/encoded with the wrong code page.
+            try
+            {
+                bool fileMismatchRead = readEncodingIDs[S_TOTRANSLATE] != readEncodingIDs[S_FILENAME];
+                bool fileMismatchWrite = writeEncodingIDs[S_TOTRANSLATE] != writeEncodingIDs[S_FILENAME];
+                if ((cmdSetMainRead || cmdSetMainWrite) && !(cmdSetFileRead || cmdSetFileWrite) && (fileMismatchRead || fileMismatchWrite))
+                {
+                    Console.WriteLine("Warning: -readcode/-writecode only set the main string encoding. Filename encoding is still Read="
+                        + readEncodingIDs[S_FILENAME] + " Write=" + writeEncodingIDs[S_FILENAME] + ".");
+                    Console.WriteLine("If your project stores resource names (FaceSet/Sound/etc.) in a different codepage, re-saving during -import/-rewrite may break file references.");
+                    Console.WriteLine("Consider adding: -filereadcode <codepage> -filewritecode <codepage> (and possibly -miscreadcode/-miscwritecode).");
+                }
+                
+                bool miscMismatchRead = readEncodingIDs[S_TOTRANSLATE] != readEncodingIDs[S_UNTRANSLATED];
+                bool miscMismatchWrite = writeEncodingIDs[S_TOTRANSLATE] != writeEncodingIDs[S_UNTRANSLATED];
+                if ((cmdSetMainRead || cmdSetMainWrite) && !(cmdSetMiscRead || cmdSetMiscWrite) && (miscMismatchRead || miscMismatchWrite))
+                {
+                    Console.WriteLine("Note: Misc string encoding is still Read=" + readEncodingIDs[S_UNTRANSLATED] + " Write=" + writeEncodingIDs[S_UNTRANSLATED]
+                        + ". Use -miscreadcode/-miscwritecode to change it.");
+                }
+            }
+            catch { }
         }
         
         // Extracts all data to text files in a Scripts folder.
