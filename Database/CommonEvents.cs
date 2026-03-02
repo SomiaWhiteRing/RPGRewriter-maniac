@@ -154,7 +154,10 @@ namespace RPGRewriter
                 else
                     commonHeader.WriteLine("===== Common " + id + " =====");
                 
-                commonConditions.WriteLine("* Event Trigger: " + eventTriggers[eventTrigger]);
+                string triggerStr = eventTrigger >= 0 && eventTrigger < eventTriggers.Length
+                    ? eventTriggers[eventTrigger]
+                    : ("Unknown(" + eventTrigger + ")");
+                commonConditions.WriteLine("* Event Trigger: " + triggerStr);
                 if (usingSwitch)
                     commonConditions.WriteLine("* If Switch " + M.getDataSwitch(switchNum));
                 commonConditions.WriteLine();

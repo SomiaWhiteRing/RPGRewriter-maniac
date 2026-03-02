@@ -62,6 +62,7 @@ namespace RPGRewriter
         int money = 0; // 0c
         int itemDrop = 0; // 0d
         int dropRate = 100; // 0e
+        int unknownValue0F = 0; // 0f (observed in some projects; keep for roundtrip compatibility)
         bool useCrit = false; // 15
         int critRate = 30; // 16
         bool oftenMiss = false; // 1a
@@ -124,6 +125,8 @@ namespace RPGRewriter
                     itemDrop = M.readLengthMultibyte(f);
                 if (chunks.next(0x0e))
                     dropRate = M.readLengthMultibyte(f);
+                if (chunks.next(0x0f))
+                    unknownValue0F = M.readLengthMultibyte(f);
                 
                 if (chunks.next(0x15))
                     useCrit = M.readLengthBool(f);
@@ -258,6 +261,8 @@ namespace RPGRewriter
                 M.writeLengthMultibyte(itemDrop);
             if (chunks.wasNext(0x0e))
                 M.writeLengthMultibyte(dropRate);
+            if (chunks.wasNext(0x0f))
+                M.writeLengthMultibyte(unknownValue0F);
                 
             if (chunks.wasNext(0x15))
                 M.writeLengthBool(useCrit);
@@ -304,6 +309,7 @@ namespace RPGRewriter
              || money != 0 // 0c
              || itemDrop != 0 // 0d
              || dropRate != 100 // 0e
+             || unknownValue0F != 0 // 0f
              || useCrit // 15
              || critRate != 30 // 16
              || oftenMiss // 1a

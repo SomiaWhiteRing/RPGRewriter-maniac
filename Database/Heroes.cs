@@ -222,12 +222,32 @@ namespace RPGRewriter
                 if (chunks.next(0x47))
                     conditionEffectLength = M.readLengthMultibyte(f);
                 if (chunks.next(0x48))
+                {
                     conditionEffect = M.readByteArray(f);
+                    if (conditionEffectLength > 0 && conditionEffect.Length < conditionEffectLength)
+                    {
+                        int[] expanded = new int[conditionEffectLength];
+                        Array.Copy(conditionEffect, expanded, conditionEffect.Length);
+                        for (int i = conditionEffect.Length; i < conditionEffectLength; i++)
+                            expanded[i] = M.readByte(f);
+                        conditionEffect = expanded;
+                    }
+                }
                 
                 if (chunks.next(0x49))
                     attributeRankLength = M.readLengthMultibyte(f);
                 if (chunks.next(0x4a))
+                {
                     attributeRank = M.readByteArray(f);
+                    if (attributeRankLength > 0 && attributeRank.Length < attributeRankLength)
+                    {
+                        int[] expanded = new int[attributeRankLength];
+                        Array.Copy(attributeRank, expanded, attributeRank.Length);
+                        for (int i = attributeRank.Length; i < attributeRankLength; i++)
+                            expanded[i] = M.readByte(f);
+                        attributeRank = expanded;
+                    }
+                }
                 
                 if (chunks.next(0x50))
                     battleCommands = M.readFourByteArray(f);
@@ -277,38 +297,60 @@ namespace RPGRewriter
             StringWriter conditionEffectStr = new StringWriter(new StringBuilder());
             StringWriter attributeRankStr = new StringWriter(new StringBuilder());
             StringWriter battleCommandStr = new StringWriter(new StringBuilder());
+
+            int[][] safeStatsForLevel = statsForLevel;
+            if (safeStatsForLevel == null || safeStatsForLevel.Length < 6)
+            {
+                safeStatsForLevel = new int[6][];
+                for (int i = 0; i < safeStatsForLevel.Length; i++)
+                    safeStatsForLevel[i] = new int[0];
+            }
+            int[] safeStartingEquipment = startingEquipment != null? startingEquipment : new int[5];
+            List<HeroLearnSkill> safeLearnSkills = learnSkills != null? learnSkills : new List<HeroLearnSkill>();
+            int[] safeConditionEffect = conditionEffect != null? conditionEffect : new int[0];
+            int[] safeAttributeRank = attributeRank != null? attributeRank : new int[0];
             
             for (int stat = 0; stat < 6; stat++)
             {
                 statCurvesStr.Write(statNames[stat] + ":");
-                for (int level = 0; level < statsForLevel[stat].Length; level++)
-                    statCurvesStr.Write(" " + statsForLevel[stat][level]);
+                int[] statCurve = safeStatsForLevel[stat] != null? safeStatsForLevel[stat] : new int[0];
+                for (int level = 0; level < statCurve.Length; level++)
+                    statCurvesStr.Write(" " + statCurve[level]);
                 if (stat < 5)
                     statCurvesStr.WriteLine();
             }
             
             for (int slot = 0; slot < 5; slot++)
             {
-                if (startingEquipment[slot] > 0)
-                    startingEquipmentStr.Write(equipSlots[slot] + ": " + M.getDataItem(startingEquipment[slot]));
+                int equipId = slot < safeStartingEquipment.Length? safeStartingEquipment[slot] : 0;
+                if (equipId > 0)
+                    startingEquipmentStr.Write(equipSlots[slot] + ": " + M.getDataItem(equipId));
                 else
                     startingEquipmentStr.Write(equipSlots[slot] + ": None");
                 if (slot < 4)
                     startingEquipmentStr.WriteLine();
             }
             
-            for (int i = 0; i < learnSkills.Count; i++)
-                learnSkillsStr.WriteLine(learnSkills[i].getString());
+            for (int i = 0; i < safeLearnSkills.Count; i++)
+                learnSkillsStr.WriteLine(safeLearnSkills[i].getString());
             if (learnSkillsStr.ToString() == "")
                 learnSkillsStr.WriteLine("(None)");
             
-            for (int condition = 0; condition < conditionEffect.Length; condition++)
-                conditionEffectStr.WriteLine(M.getDataCondition(condition + 1) + ": " + effectRanks[conditionEffect[condition]]);
+            for (int condition = 0; condition < safeConditionEffect.Length; condition++)
+            {
+                int rank = safeConditionEffect[condition];
+                string rankStr = rank >= 0 && rank < effectRanks.Length ? effectRanks[rank] : ("Unknown(" + rank + ")");
+                conditionEffectStr.WriteLine(M.getDataCondition(condition + 1) + ": " + rankStr);
+            }
             if (conditionEffectStr.ToString() == "")
                 conditionEffectStr.WriteLine("(Default)");
             
-            for (int attribute = 0; attribute < attributeRank.Length; attribute++)
-                attributeRankStr.WriteLine(M.getDataAttribute(attribute + 1) + ": " + effectRanks[attributeRank[attribute]]);
+            for (int attribute = 0; attribute < safeAttributeRank.Length; attribute++)
+            {
+                int rank = safeAttributeRank[attribute];
+                string rankStr = rank >= 0 && rank < effectRanks.Length ? effectRanks[rank] : ("Unknown(" + rank + ")");
+                attributeRankStr.WriteLine(M.getDataAttribute(attribute + 1) + ": " + rankStr);
+            }
             if (attributeRankStr.ToString() == "")
                 attributeRankStr.WriteLine("(Default)");
             

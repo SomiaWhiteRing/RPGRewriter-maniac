@@ -24,7 +24,7 @@ namespace RPGRewriter
         {
         }
 
-        public bool IsSuccessfullyLoaded { get; private set; } = false; // 默认为 false
+        public bool IsSuccessfullyLoaded { get; private set; } // 默认为 false
 
         // Loads a single event within a map.
         override public void load(FileStream f)
@@ -67,11 +67,11 @@ namespace RPGRewriter
                 this.IsSuccessfullyLoaded = true;
 
             }
-            catch (Exception ex) // 捕获加载过程中的任何异常
+            catch (Exception) // 捕获加载过程中的任何异常
             {
                 // 如果发生异常，IsSuccessfullyLoaded 将保持 false
                 // 重新抛出异常，让 Map.cs 的 catch 块处理恢复逻辑
-                throw ex;
+                throw;
             }
         }
         

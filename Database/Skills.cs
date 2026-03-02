@@ -557,7 +557,8 @@ namespace RPGRewriter
         
         override public string getString()
         {
-            return M.getDataHero(id) + " Animation: " + moves[movement] + ", " + M.getDataBattlerPose(pose)
+            string moveName = movement >= 0 && movement < moves.Length? moves[movement] : ("Unknown(" + movement + ")");
+            return M.getDataHero(id) + " Animation: " + moveName + ", " + M.getDataBattlerPose(pose)
                 + (afterimages == 1 && movement != 0? " (With Afterimages)" : "");
         }
         

@@ -64,6 +64,13 @@ namespace RPGRewriter
                 stringArg = M.readStringMoveAndRewrite(f, M.M_CHARSET, ref lengthTemp, M.S_FILENAME, source);
                 value = M.readByte(f); // Index
                 lengthTemp--;
+                
+                if (source != "Custom" && value == 129) // Fake multibyte index in Move Event routes
+                {
+                    value += (M.readByte(f) - 1) * 128;
+                    value += M.readByte(f) - 1;
+                    lengthTemp--;
+                }
             }
             else if (id == 0x23) // Sound
             {
@@ -96,7 +103,7 @@ namespace RPGRewriter
         // Returns move step string.
         public string getString()
         {
-            string moveString = moveStr[id];
+            string moveString = id >= 0 && id < moveStr.Length ? moveStr[id] : ("UnknownMove(" + id + ")");
             
             if (id == 0x20) // Switch On
                 moveString = "Switch " + M.getDataSwitch(value) + " On";
@@ -141,7 +148,15 @@ namespace RPGRewriter
                 else if (id == 0x22) // CharSet Change
                 {
                     lengthMinus += M.writeString(stringArg, M.S_FILENAME, source);
-                    M.writeByte(value); // Index
+                    if (source != "Custom" && value >= 128) // Fake multibyte index in Move Event routes
+                    {
+                        M.writeByte(0x81);
+                        M.writeByte(M.div(value, 128));
+                        M.writeByte(value % 128);
+                        lengthMinus++; // One of these bytes doesn't get counted in length
+                    }
+                    else
+                        M.writeByte(value); // Index
                 }
                 else if (id == 0x23) // Sound
                 {

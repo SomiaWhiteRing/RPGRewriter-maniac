@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 using System.Windows.Forms;
 using Newtonsoft.Json;
 
@@ -33,6 +34,8 @@ namespace RPGRewriter
         public const int M_SYSTEM2 = 17;
         public const int M_TITLE = 18;
         public const int FOLDERCOUNT = 19;
+        public const int NORMALIZED_BASENAME_MAX = 64;
+        public const int NORMALIZED_PATH_LIMIT = 240;
         
         // Constants for other modes.
         public const int M_MESSAGEALL = 19;
@@ -266,6 +269,14 @@ namespace RPGRewriter
         {
             try
             {
+            // Avoid stale error logs from previous runs being mistaken for new failures.
+            try
+            {
+                if (File.Exists("error.log"))
+                    File.Delete("error.log");
+            }
+            catch { }
+
             Console.Title = "RM2K Translation Assistant";
             
             UNICODE = Encoding.UTF8;
@@ -2669,6 +2680,304 @@ namespace RPGRewriter
             
             return true;
         }
+
+        static int getSafeMaxBaseNameLength(string folderPath)
+        {
+            int pathBasedMax = NORMALIZED_PATH_LIMIT - (folderPath.Length + 1 + 12);
+            int maxLen = NORMALIZED_BASENAME_MAX;
+            if (pathBasedMax < maxLen)
+                maxLen = pathBasedMax;
+            if (maxLen < 12)
+                maxLen = 12;
+            return maxLen;
+        }
+
+        static bool isSafeResourceFilenameChar(char c)
+        {
+            if ((c >= 'A' && c <= 'Z')
+             || (c >= 'a' && c <= 'z')
+             || (c >= '0' && c <= '9')
+             || c == '_'
+             || c == '-')
+                return true;
+            return false;
+        }
+
+        static string normalizeResourceFilenameBase(string str)
+        {
+            if (string.IsNullOrEmpty(str))
+                return "";
+
+            StringBuilder sb = new StringBuilder();
+            bool lastUnderscore = false;
+            foreach (char c in str.Trim())
+            {
+                if (isSafeResourceFilenameChar(c))
+                {
+                    sb.Append(c);
+                    lastUnderscore = false;
+                }
+                else
+                {
+                    if (!lastUnderscore && sb.Length > 0)
+                    {
+                        sb.Append('_');
+                        lastUnderscore = true;
+                    }
+                }
+            }
+
+            return sb.ToString().Trim('_', '-');
+        }
+
+        static string getFolderCode(int mode)
+        {
+            StringBuilder code = new StringBuilder();
+            string folder = FOLDER[mode];
+            foreach (char c in folder)
+            {
+                if (char.IsLetterOrDigit(c))
+                {
+                    code.Append(char.ToUpperInvariant(c));
+                    if (code.Length >= 2)
+                        break;
+                }
+            }
+
+            while (code.Length < 2)
+                code.Append('X');
+
+            return code.ToString();
+        }
+
+        static bool isReservedWindowsFilename(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return true;
+
+            string upper = name.ToUpperInvariant();
+            if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL")
+                return true;
+            if ((upper.Length == 4 && upper.StartsWith("COM")) || (upper.Length == 4 && upper.StartsWith("LPT")))
+            {
+                char digit = upper[3];
+                if (digit >= '1' && digit <= '9')
+                    return true;
+            }
+            return false;
+        }
+
+        static string getStableHashHex(string seed)
+        {
+            if (seed == null)
+                seed = "";
+
+            using (SHA1 sha1 = SHA1.Create())
+            {
+                byte[] hash = sha1.ComputeHash(Encoding.UTF8.GetBytes(seed));
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < hash.Length; i++)
+                    sb.Append(hash[i].ToString("X2"));
+                return sb.ToString();
+            }
+        }
+
+        static string buildHashedFilenameBase(int mode, string sourceName, string targetName)
+        {
+            string seed = FOLDER[mode] + "|" + sourceName + "|" + targetName;
+            return getFolderCode(mode) + "_" + getStableHashHex(seed).Substring(0, 10);
+        }
+
+        static string shortenFilenameWithHash(string baseName, int mode, string sourceName, string targetName, int maxLen)
+        {
+            if (maxLen < 12)
+                maxLen = 12;
+
+            string hash = getStableHashHex(FOLDER[mode] + "|" + sourceName + "|" + targetName + "|SHORT").Substring(0, 10);
+            int keep = maxLen - hash.Length - 1;
+            if (keep < 1)
+                keep = 1;
+
+            string prefix = baseName;
+            if (prefix.Length > keep)
+                prefix = prefix.Substring(0, keep);
+            prefix = prefix.Trim('_', '-');
+            if (prefix == "")
+                prefix = getFolderCode(mode);
+
+            string shortened = prefix + "_" + hash;
+            if (shortened.Length > maxLen)
+                shortened = shortened.Substring(0, maxLen);
+            shortened = shortened.Trim('_', '-');
+            if (shortened == "")
+                shortened = buildHashedFilenameBase(mode, sourceName, targetName);
+            if (shortened.Length > maxLen)
+                shortened = shortened.Substring(0, maxLen);
+            return shortened;
+        }
+
+        static string makeUniqueNormalizedName(string baseName, int maxLen, HashSet<string> used, int mode, string sourceName, string targetName)
+        {
+            if (!used.Contains(baseName) && !isReservedWindowsFilename(baseName))
+                return baseName;
+
+            for (int suffixNum = 1; suffixNum < 10000; suffixNum++)
+            {
+                string suffix = "_" + suffixNum;
+                int keep = maxLen - suffix.Length;
+                if (keep < 1)
+                    keep = 1;
+
+                string prefix = baseName;
+                if (prefix.Length > keep)
+                    prefix = prefix.Substring(0, keep);
+                prefix = prefix.Trim('_', '-');
+                if (prefix == "")
+                    prefix = getFolderCode(mode);
+
+                string candidate = prefix + suffix;
+                if (candidate.Length > maxLen)
+                    candidate = candidate.Substring(0, maxLen);
+                if (!used.Contains(candidate) && !isReservedWindowsFilename(candidate))
+                    return candidate;
+            }
+
+            string fallback = shortenFilenameWithHash(buildHashedFilenameBase(mode, sourceName, targetName), mode, sourceName, targetName, maxLen);
+            int counter = 1;
+            while (used.Contains(fallback) && counter < 10000)
+            {
+                string suffix = "_" + counter++;
+                int keep = maxLen - suffix.Length;
+                if (keep < 1)
+                    keep = 1;
+                string prefix = fallback;
+                if (prefix.Length > keep)
+                    prefix = prefix.Substring(0, keep);
+                fallback = prefix + suffix;
+            }
+            return fallback;
+        }
+
+        static string resolveAvailableDestinationBaseName(int mode, string sourceName, string desiredName, string folderPath, string fileExt, string currentFile, int maxLen)
+        {
+            string normalized = normalizeResourceFilenameBase(desiredName);
+            if (normalized == "")
+                normalized = buildHashedFilenameBase(mode, sourceName, desiredName);
+
+            if (isReservedWindowsFilename(normalized))
+                normalized = buildHashedFilenameBase(mode, sourceName, desiredName);
+
+            if (normalized.Length > maxLen)
+                normalized = shortenFilenameWithHash(normalized, mode, sourceName, desiredName, maxLen);
+
+            if (isReservedWindowsFilename(normalized))
+                normalized = shortenFilenameWithHash(buildHashedFilenameBase(mode, sourceName, desiredName), mode, sourceName, desiredName, maxLen);
+
+            string candidate = normalized;
+            for (int suffixNum = 0; suffixNum < 10000; suffixNum++)
+            {
+                if (suffixNum > 0)
+                {
+                    string suffix = "_" + suffixNum;
+                    int keep = maxLen - suffix.Length;
+                    if (keep < 1)
+                        keep = 1;
+                    string prefix = normalized;
+                    if (prefix.Length > keep)
+                        prefix = prefix.Substring(0, keep);
+                    prefix = prefix.Trim('_', '-');
+                    if (prefix == "")
+                        prefix = getFolderCode(mode);
+                    candidate = prefix + suffix;
+                }
+
+                if (candidate.Length > maxLen)
+                    candidate = candidate.Substring(0, maxLen);
+                if (isReservedWindowsFilename(candidate))
+                    continue;
+
+                string destination = Path.Combine(folderPath, candidate + fileExt);
+                if (string.Equals(destination, currentFile, StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+                if (destination.Length >= NORMALIZED_PATH_LIMIT)
+                    continue;
+                if (!File.Exists(destination))
+                    return candidate;
+            }
+
+            return buildHashedFilenameBase(mode, sourceName, desiredName);
+        }
+
+        static void normalizeFilenameTranslationsForDirectory(string dir)
+        {
+            if (transList == null)
+                return;
+
+            int changedCount = 0;
+            int hashedOrShortenedCount = 0;
+            int deduplicatedCount = 0;
+
+            for (int mode = 0; mode < FOLDERCOUNT; mode++)
+            {
+                if (transList[mode, 0] == null || transList[mode, 1] == null)
+                    continue;
+
+                int maxLen = getSafeMaxBaseNameLength(Path.Combine(dir, FOLDER[mode]));
+                HashSet<string> usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                for (int i = 0; i < transList[mode, 1].Count; i++)
+                {
+                    string sourceName = i < transList[mode, 0].Count ? transList[mode, 0][i] : "";
+                    string targetName = transList[mode, 1][i] == null ? "" : transList[mode, 1][i];
+                    string originalTarget = targetName;
+                    bool usedHashOrShortened = false;
+
+                    string normalized = normalizeResourceFilenameBase(targetName);
+                    if (normalized == "")
+                    {
+                        normalized = buildHashedFilenameBase(mode, sourceName, targetName);
+                        usedHashOrShortened = true;
+                    }
+
+                    if (isReservedWindowsFilename(normalized))
+                    {
+                        normalized = buildHashedFilenameBase(mode, sourceName, targetName);
+                        usedHashOrShortened = true;
+                    }
+
+                    if (normalized.Length > maxLen)
+                    {
+                        normalized = shortenFilenameWithHash(normalized, mode, sourceName, targetName, maxLen);
+                        usedHashOrShortened = true;
+                    }
+
+                    if (usedNames.Contains(normalized))
+                    {
+                        string unique = makeUniqueNormalizedName(normalized, maxLen, usedNames, mode, sourceName, targetName);
+                        if (unique != normalized)
+                            deduplicatedCount++;
+                        normalized = unique;
+                    }
+
+                    usedNames.Add(normalized);
+
+                    if (normalized != originalTarget)
+                    {
+                        transList[mode, 1][i] = normalized;
+                        changedCount++;
+                        if (usedHashOrShortened)
+                            hashedOrShortenedCount++;
+                    }
+                }
+            }
+
+            if (changedCount > 0)
+            {
+                Console.WriteLine("Normalized " + changedCount + " filename translation entries ("
+                    + hashedOrShortenedCount + " hashed/shortened, "
+                    + deduplicatedCount + " deduplicated).");
+            }
+        }
         
         // Renames files in all subfolders according to the loaded input file. Returns true if anything was actually renamed.
         static bool translateFilenames(string filepath)
@@ -2676,15 +2985,18 @@ namespace RPGRewriter
             string dir = Path.GetDirectoryName(filepath);
             bool anyRenameExists = false;
             
+            normalizeFilenameTranslationsForDirectory(dir);
             Console.WriteLine("Renaming files...");
             
             // Go through every folder.
             for (int i = 0; i < FOLDERCOUNT; i++)
             {
-                if (Directory.Exists(dir + "\\" + FOLDER[i]))
+                string folderPath = Path.Combine(dir, FOLDER[i]);
+                if (Directory.Exists(folderPath))
                 {
                     bool renameExists = false;
-                    IEnumerable<string> fileList = Directory.EnumerateFiles(dir + "\\" + FOLDER[i], "*.*");
+                    int maxLen = getSafeMaxBaseNameLength(folderPath);
+                    IEnumerable<string> fileList = Directory.EnumerateFiles(folderPath, "*.*");
                     foreach (string file in fileList)
                     {
                         // If original list contains the filename, rename the file to the translation.
@@ -2694,18 +3006,85 @@ namespace RPGRewriter
                         string fileExt = Path.GetExtension(file);
                         if (transList[i, 0].Contains(fileName))
                         {
+                            int transIndex = transList[i, 0].IndexOf(fileName);
+                            if (transIndex < 0 || transIndex >= transList[i, 1].Count)
+                                continue;
+
                             if (!renameExists)
                             {
                                 renameExists = true;
                                 anyRenameExists = true;
                                 Console.WriteLine("Renaming files in " + FOLDER[i] + " folder...");
                             }
-                            string renamedName = transList[i, 1][transList[i, 0].IndexOf(fileName)];
-                            string destination = dir + "\\" + FOLDER[i] + "\\" + renamedName + fileExt;
-                            if (!File.Exists(destination))
-                                File.Move(file, destination);
-                            else
-                                Console.WriteLine("Cannot rename to " + renamedName + ". A file with that name already exists.");
+                            string renamedName = transList[i, 1][transIndex];
+                            string resolvedName = resolveAvailableDestinationBaseName(i, fileName, renamedName, folderPath, fileExt, file, maxLen);
+                            if (resolvedName != renamedName)
+                            {
+                                transList[i, 1][transIndex] = resolvedName;
+                                renamedName = resolvedName;
+                            }
+                            if (renamedName == fileName)
+                                continue;
+
+                            string destination = Path.Combine(folderPath, renamedName + fileExt);
+                            if (string.Equals(file, destination, StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            try
+                            {
+                                if (!File.Exists(destination))
+                                    File.Move(file, destination);
+                                else
+                                {
+                                    string fallbackName = resolveAvailableDestinationBaseName(i, fileName, buildHashedFilenameBase(i, fileName, renamedName), folderPath, fileExt, file, maxLen);
+                                    string fallbackDestination = Path.Combine(folderPath, fallbackName + fileExt);
+                                    if (!File.Exists(fallbackDestination) && !string.Equals(file, fallbackDestination, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        File.Move(file, fallbackDestination);
+                                        transList[i, 1][transIndex] = fallbackName;
+                                        Console.WriteLine("Renaming conflict for " + fileName + ". Using fallback name " + fallbackName + ".");
+                                    }
+                                    else
+                                    {
+                                        transList[i, 1][transIndex] = fileName;
+                                        Console.WriteLine("Cannot rename " + fileName + " to " + renamedName + ". A file with that name already exists.");
+                                    }
+                                }
+                            }
+                            catch (PathTooLongException)
+                            {
+                                string fallbackName = resolveAvailableDestinationBaseName(i, fileName, buildHashedFilenameBase(i, fileName, renamedName), folderPath, fileExt, file, maxLen);
+                                string fallbackDestination = Path.Combine(folderPath, fallbackName + fileExt);
+                                try
+                                {
+                                    if (!File.Exists(fallbackDestination) && !string.Equals(file, fallbackDestination, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        File.Move(file, fallbackDestination);
+                                        transList[i, 1][transIndex] = fallbackName;
+                                        Console.WriteLine("Path too long for " + fileName + " -> " + renamedName + ". Using fallback name " + fallbackName + ".");
+                                    }
+                                    else
+                                    {
+                                        transList[i, 1][transIndex] = fileName;
+                                        Console.WriteLine("Cannot rename " + fileName + " to " + renamedName + ". Path is too long and fallback name is unavailable.");
+                                    }
+                                }
+                                catch (Exception e2)
+                                {
+                                    transList[i, 1][transIndex] = fileName;
+                                    Console.WriteLine("Cannot rename " + fileName + " to " + renamedName + ". Path is too long and fallback rename failed: " + e2.Message);
+                                }
+                            }
+                            catch (IOException e)
+                            {
+                                transList[i, 1][transIndex] = fileName;
+                                Console.WriteLine("Cannot rename " + fileName + " to " + renamedName + ". " + e.Message + " Keeping original name.");
+                            }
+                            catch (UnauthorizedAccessException e)
+                            {
+                                transList[i, 1][transIndex] = fileName;
+                                Console.WriteLine("Cannot rename " + fileName + " to " + renamedName + ". " + e.Message + " Keeping original name.");
+                            }
                         }
                     }
                 }
@@ -3200,7 +3579,10 @@ namespace RPGRewriter
         // Reads a single byte.
         public static byte readByte(FileStream f)
         {
-            return (byte)f.ReadByte();
+            int value = f.ReadByte();
+            if (value == -1)
+                throw new EndOfStreamException("Unexpected EOF while reading byte. " + currentPosition());
+            return (byte)value;
         }
         
         // Reads and returns the value of a int16 (two bytes).
@@ -3224,11 +3606,23 @@ namespace RPGRewriter
         // Reads and returns the value of a "multibyte," used for values over 127 (0x7f).
         public static int readMultibyte(FileStream f, int sum = 0)
         {
-            byte b = readByte(f);
-            if (b < 128)
-                return b + sum;
-            else
-                return readMultibyte(f, (b - 128 + sum) * 128);
+            int current = sum;
+            int depth = 0;
+            const int maxDepth = 16; // Prevent malformed data from causing unbounded chains.
+            
+            while (true)
+            {
+                byte b = readByte(f);
+                if (b < 128)
+                    return unchecked(current + b);
+                
+                // Preserve historical behavior (unchecked int overflow) for compatibility
+                // with projects that encode extended values in fields parsed as multibyte.
+                current = unchecked((b - 128 + current) * 128);
+                depth++;
+                if (depth > maxDepth)
+                    throw new FormatException("Invalid multibyte sequence (too long). " + currentPosition());
+            }
         }
         
         // Reads a byte length (always 1), then a 0 or 1.
@@ -3596,7 +3990,7 @@ namespace RPGRewriter
 
             byte[] expectedBytes = getMultibytesForValue(nextEventNum);
             long currentPos = f.Position;
-            logMessage($"Attempting recovery: Seeking start of Event {nextEventNum} (bytes: {BitConverter.ToString(expectedBytes).Replace("-", " ")}) from offset {hexParen(currentPos)}...");
+            logMessage("Attempting recovery: Seeking start of Event " + nextEventNum + " (bytes: " + BitConverter.ToString(expectedBytes).Replace("-", " ") + ") from offset " + hexParen(currentPos) + "...");
 
             while (currentPos < endOfEventChunkPos)
             {
@@ -3644,7 +4038,7 @@ namespace RPGRewriter
                             {
                                     // Seems plausible. Reset position to the start of the found event number.
                                     f.Position = potentialStartPos; 
-                                    logMessage($"Recovery successful: Found Event {nextEventNum} start at {hexParen(f.Position)}.");
+                                    logMessage("Recovery successful: Found Event " + nextEventNum + " start at " + hexParen(f.Position) + ".");
                                     return true;
                             }
                         }
@@ -3660,14 +4054,14 @@ namespace RPGRewriter
                 catch (Exception ex) 
                 {
                     // Other reading errors during recovery attempt
-                    logMessage($"Error during recovery scan at {hexParen(currentPos)}: {ex.Message}");
+                    logMessage("Error during recovery scan at " + hexParen(currentPos) + ": " + ex.Message);
                     // Depending on the error, might want to break or just advance
                 }
 
                 currentPos++; // Advance scan position by one byte
             }
 
-            logMessage($"Recovery failed: Could not find start of Event {nextEventNum} before end of chunk ({hexParen(endOfEventChunkPos)}).");
+            logMessage("Recovery failed: Could not find start of Event " + nextEventNum + " before end of chunk (" + hexParen(endOfEventChunkPos) + ").");
             return false;
         }
         
@@ -3988,11 +4382,17 @@ namespace RPGRewriter
                 writeTwoBytes(total);
         }
         
-        // Writes a byte length, then an array of bytes.
+        // Writes a multibyte length, then an array of bytes.
         public static void writeByteArray(int[] bytes)
         {
-            writeByte(bytes.Length);
-            foreach (byte b in bytes)
+            if (bytes == null)
+            {
+                writeMultibyte(0);
+                return;
+            }
+
+            writeMultibyte(bytes.Length);
+            foreach (int b in bytes)
                 writeByte(b);
         }
         
@@ -4234,6 +4634,10 @@ namespace RPGRewriter
             do
             {
                 input = Console.ReadLine();
+                if (input == null)
+                    return false;
+                input = input.Trim();
+                
                 if (input.ToUpper() == "Y")
                     return true;
                 else if (anyNo || input.ToUpper() == "N")
@@ -5088,7 +5492,7 @@ namespace RPGRewriter
                             // if (!string.IsNullOrEmpty(currentSegment)) // 避免添加空行
                             // {
                             newLines.Add(currentSegment);
-                            Console.WriteLine($"Warning: Could not effectively wrap line segment within byte limit ({limit}): {currentSegment}");
+                            Console.WriteLine("Warning: Could not effectively wrap line segment within byte limit (" + limit + "): " + currentSegment);
                             // }
                             currentSegment = ""; // 清空，结束 while 循环
                         }

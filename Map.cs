@@ -170,21 +170,21 @@ namespace RPGRewriter
                     long safeEndOfChunk = Math.Min(declaredEndOfChunk, actualEndOfFile); // 不能读超过文件末尾
 
                     events = new List<Event>();
-                    M.logMessage($"Map {id}: Declared Event Count: {declaredEventCount}, Declared Chunk Length: {declaredEventChunkLength} bytes. Data range: {M.hexParen(startOfEventData)} - {M.hexParen(declaredEndOfChunk)} (Safe limit: {M.hexParen(safeEndOfChunk)})");
+                    M.logMessage("Map " + id + ": Declared Event Count: " + declaredEventCount + ", Declared Chunk Length: " + declaredEventChunkLength + " bytes. Data range: " + M.hexParen(startOfEventData) + " - " + M.hexParen(declaredEndOfChunk) + " (Safe limit: " + M.hexParen(safeEndOfChunk) + ")");
 
                     for (int i = 0; i < declaredEventCount; i++) // 循环使用声明的事件数量
                     {
                         long eventStartPos = f.Position;
-                        M.logMessage($"-- Map {id}: Attempting to load Event Index {i} at offset {M.hexParen(eventStartPos)} --");
+                        M.logMessage("-- Map " + id + ": Attempting to load Event Index " + i + " at offset " + M.hexParen(eventStartPos) + " --");
 
                         // *** 关键安全检查：在尝试加载前，确保起始位置有效 ***
                         if (eventStartPos >= safeEndOfChunk) // 使用安全边界
                         {
-                            M.logMessage($"Warning: Map {id} Event index {i}: Start position {M.hexParen(eventStartPos)} is at or beyond safe chunk end {M.hexParen(safeEndOfChunk)}. Stopping event read.");
+                            M.logMessage("Warning: Map " + id + " Event index " + i + ": Start position " + M.hexParen(eventStartPos) + " is at or beyond safe chunk end " + M.hexParen(safeEndOfChunk) + ". Stopping event read.");
                             break; // 停止读取
                         }
 
-                        M.currentEvent = $"Map {id} Event Index {i}";
+                        M.currentEvent = "Map " + id + " Event Index " + i;
                         M.currentPage = ""; M.currentLine = "";
                         M.currentEventNum = 0; M.currentPageNum = 0;
 
@@ -201,7 +201,7 @@ namespace RPGRewriter
                             currentEvent.load(f); // 尝试加载，可能抛异常
 
                             positionAfterLoad = f.Position; // 记录成功加载后的位置
-                            M.logMessage($"   Map {id} Event {M.currentEventNum} (Index {i}): Internal load finished at {M.hexParen(positionAfterLoad)}.");
+                            M.logMessage("   Map " + id + " Event " + M.currentEventNum + " (Index " + i + "): Internal load finished at " + M.hexParen(positionAfterLoad) + ".");
 
                             // 手动检查结尾字节，同样使用安全边界
                             if (positionAfterLoad < safeEndOfChunk)
@@ -209,16 +209,16 @@ namespace RPGRewriter
                                 byte tailByte = M.readByte(f);
                                 if (tailByte == 0x00) {
                                     tailByteCheckPassed = true;
-                                    M.logMessage($"   Map {id} Event {M.currentEventNum}: Tail byte check passed (0x00 found).");
+                                    M.logMessage("   Map " + id + " Event " + M.currentEventNum + ": Tail byte check passed (0x00 found).");
                                 } else {
                                     tailByteCheckPassed = false;
                                     recoveryNeeded = true;
-                                    M.logMessage($"Warning: Map {id} Event {M.currentEventNum} (Index {i}): Tail byte check failed at offset {M.hexParen(positionAfterLoad)}. Expected 0x00, read {M.hexParen(tailByte)}. Recovery needed.");
+                                    M.logMessage("Warning: Map " + id + " Event " + M.currentEventNum + " (Index " + i + "): Tail byte check failed at offset " + M.hexParen(positionAfterLoad) + ". Expected 0x00, read " + M.hexParen(tailByte) + ". Recovery needed.");
                                 }
                             } else {
                                 tailByteCheckPassed = false;
                                 recoveryNeeded = true;
-                                M.logMessage($"Warning: Map {id} Event {M.currentEventNum} (Index {i}): Reached/exceeded safe chunk end ({M.hexParen(safeEndOfChunk)}) at offset {M.hexParen(positionAfterLoad)} when expecting tail byte 0x00. Recovery needed.");
+                                M.logMessage("Warning: Map " + id + " Event " + M.currentEventNum + " (Index " + i + "): Reached/exceeded safe chunk end (" + M.hexParen(safeEndOfChunk) + ") at offset " + M.hexParen(positionAfterLoad) + " when expecting tail byte 0x00. Recovery needed.");
                             }
                         }
                         catch (Exception ex)
@@ -229,7 +229,7 @@ namespace RPGRewriter
                             positionAfterLoad = f.Position; // 记录异常发生时的位置
 
                             int eventNumWithError = M.currentEventNum != 0 ? M.currentEventNum : (i + 1);
-                            M.logMessage($"Error during Map {id} Event {eventNumWithError} (Index {i}) internal parsing starting near {M.hexParen(eventStartPos)}: {ex.Message}");
+                            M.logMessage("Error during Map " + id + " Event " + eventNumWithError + " (Index " + i + ") internal parsing starting near " + M.hexParen(eventStartPos) + ": " + ex.Message);
                             M.debugMessage(ex.StackTrace);
                         }
 
@@ -238,10 +238,10 @@ namespace RPGRewriter
                         if (overallSuccess) {
                             events.Add(currentEvent);
                             eventAdded = true;
-                            M.logMessage($"   Map {id} Event {M.currentEventNum}: Successfully loaded and added.");
+                            M.logMessage("   Map " + id + " Event " + M.currentEventNum + ": Successfully loaded and added.");
                         } else if (!eventAdded) {
                             int eventNumWithError = M.currentEventNum != 0 ? M.currentEventNum : (i + 1);
-                            M.logMessage($"Skipped adding Event {eventNumWithError} (Index {i}) from Map {id}.");
+                            M.logMessage("Skipped adding Event " + eventNumWithError + " (Index " + i + ") from Map " + id + ".");
                             // 如果不是内部异常导致未添加，说明是结尾字节错了，也需要恢复
                             if (!internalLoadThrewException) recoveryNeeded = true;
                         }
@@ -251,38 +251,38 @@ namespace RPGRewriter
                             long posBeforeRecovery = positionAfterLoad != -1 ? positionAfterLoad : f.Position; // Use position after load/error
                             int eventNumWithError = M.currentEventNum != 0 ? M.currentEventNum : (i + 1);
                             int nextEventNum = i + 2; // 计算下一个期望的事件编号 (索引+2)
-                            M.logMessage($"   Map {id} Event {eventNumWithError} (Index {i}): Recovery needed, attempting skip starting from {M.hexParen(posBeforeRecovery)}...");
+                            M.logMessage("   Map " + id + " Event " + eventNumWithError + " (Index " + i + "): Recovery needed, attempting skip starting from " + M.hexParen(posBeforeRecovery) + "...");
 
                             // *** 传递 safeEndOfChunk 作为恢复的边界 ***
                             bool recoverySucceeded = M.TrySkipToNextEventStart(f, i, declaredEventCount, safeEndOfChunk);
 
                             if (!recoverySucceeded) {
-                                M.logMessage($"Recovery failed after error at index {i}. Aborting reading remaining events in Map {id}.");
+                                M.logMessage("Recovery failed after error at index " + i + ". Aborting reading remaining events in Map " + id + ".");
                                 // *** 尝试将指针设置到 *声明* 的块尾或安全块尾中较小者 ***
                                 f.Position = Math.Min(declaredEndOfChunk, safeEndOfChunk);
                                 break;
                             } else {
                                 long posAfterRecovery = f.Position;
-                                M.logMessage($"   Map {id}: Recovery function returned success, stream position moved to {M.hexParen(posAfterRecovery)}.");
+                                M.logMessage("   Map " + id + ": Recovery function returned success, stream position moved to " + M.hexParen(posAfterRecovery) + ".");
                                 if (posAfterRecovery <= posBeforeRecovery && nextEventNum <= declaredEventCount) { // 增加检查，如果指针没前进且不是最后一个事件恢复
-                                    M.logMessage($"Critical Error: Recovery function success but stream position did not advance significantly ({M.hexParen(posBeforeRecovery)} -> {M.hexParen(posAfterRecovery)}) for Event {eventNumWithError}. Aborting map.");
+                                    M.logMessage("Critical Error: Recovery function success but stream position did not advance significantly (" + M.hexParen(posBeforeRecovery) + " -> " + M.hexParen(posAfterRecovery) + ") for Event " + eventNumWithError + ". Aborting map.");
                                     f.Position = Math.Min(declaredEndOfChunk, safeEndOfChunk);
                                     break;
                                 }
-                                M.logMessage($"   Continuing loop for next event index {i + 1}.");
+                                M.logMessage("   Continuing loop for next event index " + (i + 1) + ".");
                             }
                         }
-                        M.logMessage($"-- Map {id}: Finished processing Event Index {i}. Current file position: {M.hexParen(f.Position)} --");
+                        M.logMessage("-- Map " + id + ": Finished processing Event Index " + i + ". Current file position: " + M.hexParen(f.Position) + " --");
 
                     } // End of for loop
 
                     // Final position check - 调整指针到 *声明* 的结束位置或安全位置
                     long finalExpectedPos = Math.Min(declaredEndOfChunk, safeEndOfChunk);
                     if (f.Position < finalExpectedPos) {
-                        M.logMessage($"Warning: Map {id}: Finished events loop, position {M.hexParen(f.Position)} before expected end {M.hexParen(finalExpectedPos)}. Setting position to end.");
+                        M.logMessage("Warning: Map " + id + ": Finished events loop, position " + M.hexParen(f.Position) + " before expected end " + M.hexParen(finalExpectedPos) + ". Setting position to end.");
                         f.Position = finalExpectedPos;
                     } else if (f.Position > finalExpectedPos) {
-                        M.logMessage($"Critical Warning: Map {id}: Position {M.hexParen(f.Position)} is BEYOND expected event chunk end {M.hexParen(finalExpectedPos)}.");
+                        M.logMessage("Critical Warning: Map " + id + ": Position " + M.hexParen(f.Position) + " is BEYOND expected event chunk end " + M.hexParen(finalExpectedPos) + ".");
                         // 也许也强制设置回 finalExpectedPos？
                         f.Position = finalExpectedPos;
                     }

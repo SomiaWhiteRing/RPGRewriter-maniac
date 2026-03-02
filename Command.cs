@@ -20,11 +20,20 @@ namespace RPGRewriter
         
         int moveRouteTarget;
         int moveRouteFreq;
-        byte moveRouteRepeatRaw;
-        byte moveRouteSkipRaw;
+        int moveRouteFlags;
         bool moveRouteRepeat;
         bool moveRouteSkip;
         MoveRoute moveRoute;
+
+        static int CountMoveLengthValue(int value)
+        {
+            // Move-command length accounting is non-standard:
+            // one-byte values count as 1, multi-byte values count as (encoded length - 1).
+            int encodedLength = M.countMultibyte(value);
+            if (encodedLength <= 1)
+                return 1;
+            return encodedLength - 1;
+        }
         
         #region // Command Codes //
         
@@ -272,14 +281,17 @@ namespace RPGRewriter
             
             int mode = getMode();
             
-            if (opcode != C_MOVEEVENT)
+            int argCount = -1;
+            try
             {
-                int strType = mode != -1 && mode < M.FOLDERCOUNT? M.S_FILENAME : M.S_TOTRANSLATE;
-                stringArg = mode != -1? M.readStringAndRewrite(f, mode, strType) : M.readString(f, strType);
-                int argCount = M.readMultibyte(f);
-                args = new int[argCount];
-                for (int i = 0; i < argCount; i++)
-                    args[i] = M.readMultibyte(f);
+                if (opcode != C_MOVEEVENT)
+                {
+                    int strType = mode != -1 && mode < M.FOLDERCOUNT? M.S_FILENAME : M.S_TOTRANSLATE;
+                    stringArg = mode != -1? M.readStringAndRewrite(f, mode, strType) : M.readString(f, strType);
+                    argCount = M.readMultibyte(f);
+                    args = new int[argCount];
+                    for (int i = 0; i < argCount; i++)
+                        args[i] = M.readMultibyte(f);
 
                 // First pass: rewrite any embedded resource paths in all opcodes (handles ../CharSet/NAME, etc.)
                 try
@@ -481,23 +493,36 @@ namespace RPGRewriter
                     }
                 }
                 catch { }
+                }
+                else
+                {
+                    M.byteCheck(f, 0x00);
+                    
+                    int moveLength = M.readMultibyte(f);
+                    int lengthTemp = moveLength;
+                    
+                    moveRouteTarget = M.readMultibyte(f);
+                    moveRouteFreq = M.readByte(f);
+                    moveRouteFlags = M.readMultibyte(f);
+                    moveRouteRepeat = (moveRouteFlags & 0x01) != 0;
+                    moveRouteSkip = (moveRouteFlags & 0x02) != 0;
+                    lengthTemp -= CountMoveLengthValue(moveRouteTarget) + 1 + CountMoveLengthValue(moveRouteFlags);
+                    
+                    moveRoute = new MoveRoute(f, lengthTemp, "Move");
+                }
             }
-            else
+            catch (Exception)
             {
-                M.byteCheck(f, 0x00);
-                
-                int moveLength = M.readMultibyte(f);
-                int lengthTemp = moveLength;
-                
-                moveRouteTarget = M.readMultibyte(f);
-                moveRouteFreq = M.readByte(f);
-                moveRouteRepeatRaw = M.readByte(f);
-                moveRouteSkipRaw = M.readByte(f);
-                moveRouteRepeat = moveRouteRepeatRaw == 1;
-                moveRouteSkip = moveRouteSkipRaw == 1;
-                lengthTemp -= 4;
-                
-                moveRoute = new MoveRoute(f, lengthTemp, "Move");
+                Console.WriteLine("Failed command parse: opcode " + opcode
+                    + ", indent " + indent
+                    + ", mode " + mode
+                    + ", argCount " + argCount
+                    + ", at " + M.currentPosition());
+                if (debugCommandStartPos >= 0 && debugAfterHeaderPos >= 0)
+                    Console.WriteLine("Command stream position: start " + M.hexParen(debugCommandStartPos) + ", after header " + M.hexParen(debugAfterHeaderPos) + ".");
+                if (debugNextBytes != "")
+                    Console.WriteLine("Next bytes: " + debugNextBytes);
+                throw;
             }
             
             // After reading data, handle various tasks for special modes.
@@ -3747,119 +3772,119 @@ namespace RPGRewriter
         string command3002ManiacsExecuteSave()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Execute Save (3002): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Execute Save (3002): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：存档槽位?)
         }
 
         string command3004ManiacsEndLoadProcessing()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs End Load Processing (3004): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs End Load Processing (3004): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义
         }
 
         string command3006ManiacsSetMouseCoords()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Set Mouse Coordinates (3006): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Set Mouse Coordinates (3006): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：X坐标, Y坐标, 是否变量?)
         }
 
         string command3009ManiacsControlBattleProcessing()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Control Battle Processing (3009): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Control Battle Processing (3009): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：控制类型, 目标, 值?)
         }
 
         string command3010ManiacsOperateATBGauge()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Operate ATB Gauge (3010): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Operate ATB Gauge (3010): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：目标(敌/我), 操作类型, 值?)
         }
 
         string command3011ManiacsChangeBattleCommandEX()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Change Battle Command EX (3011): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Change Battle Command EX (3011): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：角色, 命令槽位, 新命令ID, 添加/移除?)
         }
 
         string command3012ManiacsGetBattleInfo()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Get Battle Information (3012): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Get Battle Information (3012): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：信息类型, 目标变量?)
         }
 
         string command3015ManiacsRewriteMap()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Rewrite Map (3015): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Rewrite Map (3015): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：图层, X, Y, 宽度, 高度, 新图块ID, 是否变量?)
         }
 
         string command3017ManiacsChangePictureID()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Change Picture ID (3017): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Change Picture ID (3017): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：原ID, 新ID, 范围?)
         }
 
         string command3019ManiacsCallCommand()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Call Command (3019): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Call Command (3019): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：目标指令代码, 参数?)
         }
 
         string command3020ManiacsOperateStringVariables()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Operate String Variables (3020): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Operate String Variables (3020): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：目标变量, 操作类型, 源/值, 范围?)
         }
 
         string command3027ManiacsAddCharacterAction()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Add Character Action (3027): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Add Character Action (3027): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (可能类似移动路线，结构复杂?)
         }
 
         string command3028ManiacsPictureEditChip()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Picture Edit (Chip) (3028): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Picture Edit (Chip) (3028): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：目标图片ID, X, Y, 图块ID?)
         }
 
         string command3029ManiacsControlTextProcessing()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Control Text Processing (3029): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Control Text Processing (3029): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：设置项, 新值?)
         }
 
         string command3030ManiacsScriptLine1()
         {
             // 通常脚本指令的第一行包含脚本内容
-            return $"Maniacs Script (Line 1) (3030): {stringArg}";
+            return "Maniacs Script (Line 1) (3030): " + stringArg;
             // Args 通常为空或有特殊用途
         }
 
         string command3031ManiacsScriptLine2Plus()
         {
             // 脚本指令的后续行
-            return $"Maniacs Script (Line 2+) (3031): {stringArg}";
+            return "Maniacs Script (Line 2+) (3031): " + stringArg;
              // Args 通常为空或有特殊用途
         }
 
         string command3032ManiacsScreenZoom()
         {
             string argString = GetArgStringForPlaceholder();
-            return $"Maniacs Screen Zoom (3032): Str='{stringArg}', Args=[{argString}]";
+            return "Maniacs Screen Zoom (3032): Str='" + stringArg + "', Args=[" + argString + "]";
             // TODO: 根据文档解析 args 参数含义 (例如：缩放比例, 中心X, 中心Y, 时间, 等待?)
         }
 
@@ -3867,7 +3892,7 @@ namespace RPGRewriter
         {
              string argString = GetArgStringForPlaceholder();
             // 可能用于向游戏内控制台输出信息
-            return $"Maniacs Console (3033): Message='{stringArg}', Args=[{argString}]";
+            return "Maniacs Console (3033): Message='" + stringArg + "', Args=[" + argString + "]";
         }
 
         // 辅助方法，用于生成参数占位符字符串
@@ -3881,7 +3906,7 @@ namespace RPGRewriter
             for (int i = 0; i < args.Length; i++)
             {
                 sb.Append(i > 0 ? ", " : "");
-                sb.Append($"Arg{i}:{args[i]}");
+                sb.Append("Arg" + i + ":" + args[i]);
             }
             return sb.ToString();
         }
@@ -3934,17 +3959,23 @@ namespace RPGRewriter
             {
                 M.writeByte(0x00);
                 
+                // Preserve unknown flag bits while still reflecting boolean edits.
+                int flags = moveRouteFlags;
+                if (moveRouteRepeat) flags |= 0x01;
+                else flags &= ~0x01;
+                if (moveRouteSkip) flags |= 0x02;
+                else flags &= ~0x02;
+                
                 int totalMoveLength = moveRoute.getLength()
-                                    + 1 // Target length, but it's always 1 regardless, I think...
-                                    + 3; // Frequency, repeat, skip
+                                    + CountMoveLengthValue(moveRouteTarget)
+                                    + 1 // Frequency
+                                    + CountMoveLengthValue(flags);
                 
                 M.writeMultibyte(totalMoveLength);
                 
                 M.writeMultibyte(moveRouteTarget);
                 M.writeByte(moveRouteFreq);
-                // Preserve raw bytes to avoid losing non-0/1 flag encodings observed in some projects.
-                M.writeByte(moveRouteRepeatRaw != 0? moveRouteRepeatRaw : (moveRouteRepeat? 1 : 0));
-                M.writeByte(moveRouteSkipRaw != 0? moveRouteSkipRaw : (moveRouteSkip? 1 : 0));
+                M.writeMultibyte(flags);
                 
                 moveRoute.write();
             }
@@ -4200,7 +4231,8 @@ namespace RPGRewriter
         // Generic base-name replacer for any asset folder using mapping or ascii-escaped fallback.
         static string ReplaceBaseNameForFolder(string folder, string baseName)
         {
-            if (!FolderModeMap.TryGetValue(folder, out int mode))
+            int mode;
+            if (!FolderModeMap.TryGetValue(folder, out mode))
                 return baseName;
 
             string name = Path.GetFileName(baseName.Trim());
@@ -4243,7 +4275,8 @@ namespace RPGRewriter
 
                 if (M.globalMode == "Checking")
                 {
-                    if (FolderModeMap.TryGetValue(folder, out int mode))
+                    int mode;
+                    if (FolderModeMap.TryGetValue(folder, out mode))
                         M.checkStringValidForMode(baseName, mode);
                     return match.Value; // do not alter in Checking
                 }

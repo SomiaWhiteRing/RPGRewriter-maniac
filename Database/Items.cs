@@ -71,6 +71,7 @@ namespace RPGRewriter
         bool halfMPCost = false; // 1b
         bool noTerrainDamage = false; // 1c
         bool cursed = false; // 1d (2003)
+        bool unknownFlag1E = false; // 1e (observed in some games; keep for roundtrip compatibility)
         bool targetEntireParty = false; // 1f
         int recoverHPPercent = 0; // 20
         int recoverHPPlus = 0; // 21
@@ -182,6 +183,8 @@ namespace RPGRewriter
                     noTerrainDamage = M.readLengthBool(f);
                 if (chunks.next(0x1d))
                     cursed = M.readLengthBool(f);
+                if (chunks.next(0x1e))
+                    unknownFlag1E = M.readLengthBool(f);
                 
                 if (chunks.next(0x1f))
                     targetEntireParty = M.readLengthBool(f);
@@ -532,6 +535,8 @@ namespace RPGRewriter
                 M.writeLengthBool(noTerrainDamage);
             if (chunks.wasNext(0x1d))
                 M.writeLengthBool(cursed);
+            if (chunks.wasNext(0x1e))
+                M.writeLengthBool(unknownFlag1E);
             
             if (chunks.wasNext(0x1f))
                 M.writeLengthBool(targetEntireParty);
@@ -625,7 +630,8 @@ namespace RPGRewriter
             if (itemName != "" // 01
              || itemDescription != "" // 02
              || classification != 0 // 03
-             || price != 0) // 05
+             || price != 0 // 05
+             || unknownFlag1E) // 1e
                 return false;
             
             return true;

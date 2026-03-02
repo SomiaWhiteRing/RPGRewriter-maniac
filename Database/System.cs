@@ -44,6 +44,8 @@ namespace RPGRewriter
         string frameName = ""; // 64 (2003)
         bool invertAnimations = false; // 65 (2003)
         bool showTitle = true; // 6f, verbose only
+        int unknown7C = 0; // 7c (observed in some projects; keep for roundtrip compatibility)
+        int unknown7E = 0; // 7e (observed in some projects; keep for roundtrip compatibility)
         
         static string myClass = "System";
         Chunks chunks;
@@ -173,6 +175,10 @@ namespace RPGRewriter
                     invertAnimations = M.readLengthBool(f);
                 if (chunks.next(0x6f))
                     showTitle = M.readLengthBool(f);
+                if (chunks.next(0x7c))
+                    unknown7C = M.readLengthMultibyte(f);
+                if (chunks.next(0x7e))
+                    unknown7E = M.readLengthMultibyte(f);
                 
                 M.byteCheck(f, 0x00);
             }
@@ -275,6 +281,8 @@ namespace RPGRewriter
                 tabText.WriteLine("Save Count: " + saveCount);
                 tabText.WriteLine("Unknown 61: " + unknown61);
                 tabText.WriteLine("Show Title: " + showTitle);
+                tabText.WriteLine("Unknown 7C: " + unknown7C);
+                tabText.WriteLine("Unknown 7E: " + unknown7E);
             }
             
             return tabText.ToString();
@@ -380,6 +388,10 @@ namespace RPGRewriter
                 M.writeLengthBool(invertAnimations);
             if (chunks.wasNext(0x6f))
                 M.writeLengthBool(showTitle);
+            if (chunks.wasNext(0x7c))
+                M.writeLengthMultibyte(unknown7C);
+            if (chunks.wasNext(0x7e))
+                M.writeLengthMultibyte(unknown7E);
             
             M.writeByte(0x00);
             

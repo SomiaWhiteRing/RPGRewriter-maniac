@@ -71,6 +71,7 @@ namespace RPGRewriter
         bool reflectSkills = false; // 25 (2003)
         bool cursed = false; // 26 (2003)
         int battlerAnimationID = 100; // 27 (2003)
+        bool unknownFlag28 = false; // 28 (observed in some projects; keep for roundtrip compatibility)
         bool hitSkillRestrict = false; // 29
         int hitSkillCutoff = 0; // 2a
         bool mindSkillRestrict = false; // 2b
@@ -169,6 +170,8 @@ namespace RPGRewriter
                 
                 if (chunks.next(0x27))
                     battlerAnimationID = M.readLengthMultibyte(f);
+                if (chunks.next(0x28))
+                    unknownFlag28 = M.readLengthBool(f);
                 
                 if (chunks.next(0x29))
                     hitSkillRestrict = M.readLengthBool(f);
@@ -408,6 +411,8 @@ namespace RPGRewriter
             
             if (chunks.wasNext(0x27))
                 M.writeLengthMultibyte(battlerAnimationID);
+            if (chunks.wasNext(0x28))
+                M.writeLengthBool(unknownFlag28);
             
             if (chunks.wasNext(0x29))
                 M.writeLengthBool(hitSkillRestrict);
@@ -481,6 +486,7 @@ namespace RPGRewriter
              || reflectSkills // 25
              || cursed // 26
              || battlerAnimationID != 100 // 27
+             || unknownFlag28 // 28
              || hitSkillRestrict // 29
              || hitSkillCutoff != 0 // 2a
              || mindSkillRestrict // 2b
