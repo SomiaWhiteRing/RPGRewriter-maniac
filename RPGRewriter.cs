@@ -3832,6 +3832,121 @@ namespace RPGRewriter
             
             return str;
         }
+
+        static bool TryGetMappedFilenameInMode(int mode, string sourceName, out string mappedName)
+        {
+            mappedName = sourceName;
+            if (mode < 0 || mode >= FOLDERCOUNT || transList == null)
+                return false;
+            if (transList[mode, 0] == null || transList[mode, 1] == null)
+                return false;
+
+            int index = transList[mode, 0].IndexOf(sourceName);
+            if (index < 0 || index >= transList[mode, 1].Count)
+                return false;
+
+            string candidate = transList[mode, 1][index];
+            if (string.IsNullOrEmpty(candidate) || candidate == sourceName)
+                return false;
+
+            mappedName = candidate;
+            return true;
+        }
+
+        static bool TryGetMappedFilenameAcrossFolders(string sourceName, out string mappedName, out int mappedMode)
+        {
+            mappedName = sourceName;
+            mappedMode = -1;
+
+            for (int mode = 0; mode < FOLDERCOUNT; mode++)
+            {
+                string candidate;
+                if (!TryGetMappedFilenameInMode(mode, sourceName, out candidate))
+                    continue;
+
+                if (mappedMode == -1)
+                {
+                    mappedMode = mode;
+                    mappedName = candidate;
+                    continue;
+                }
+
+                if (mappedName != candidate)
+                {
+                    mappedMode = -1;
+                    mappedName = sourceName;
+                    return false;
+                }
+            }
+
+            return mappedMode != -1;
+        }
+
+        static int InferFolderModeFromPathPrefix(string prefix)
+        {
+            if (string.IsNullOrEmpty(prefix))
+                return -1;
+
+            string normalized = prefix.Replace('\\', '/');
+            string[] parts = normalized.Split('/');
+
+            for (int i = parts.Length - 1; i >= 0; i--)
+            {
+                string part = parts[i].Trim();
+                if (part == "" || part == "." || part == "..")
+                    continue;
+
+                for (int mode = 0; mode < FOLDERCOUNT; mode++)
+                    if (FOLDER[mode].Equals(part, StringComparison.OrdinalIgnoreCase))
+                        return mode;
+            }
+
+            return -1;
+        }
+
+        static bool TrySplitPathLikeValue(string value, out string prefix, out string baseName, out int inferredMode)
+        {
+            prefix = "";
+            baseName = value;
+            inferredMode = -1;
+
+            if (string.IsNullOrEmpty(value))
+                return false;
+
+            int slash = value.LastIndexOf('/');
+            int backslash = value.LastIndexOf('\\');
+            int sep = slash > backslash? slash : backslash;
+            if (sep < 0)
+                return false;
+
+            prefix = value.Substring(0, sep + 1);
+            baseName = value.Substring(sep + 1);
+            if (baseName == "")
+                return false;
+
+            inferredMode = InferFolderModeFromPathPrefix(prefix);
+            return true;
+        }
+
+        static string RewritePathLikeFilename(int mode, string value)
+        {
+            string prefix;
+            string baseName;
+            int inferredMode;
+            if (!TrySplitPathLikeValue(value, out prefix, out baseName, out inferredMode))
+                return value;
+
+            string mappedName;
+            int effectiveMode = inferredMode >= 0? inferredMode : mode;
+            if (TryGetMappedFilenameInMode(effectiveMode, baseName, out mappedName))
+                return prefix + mappedName;
+
+            int mappedMode;
+            if (TryGetMappedFilenameAcrossFolders(baseName, out mappedName, out mappedMode))
+                return prefix + mappedName;
+
+            return value;
+        }
         
         // In Checking mode, check if a file exists where it should, or if the string is "valid," based on the mode.
         public static void checkStringValidForMode(string str, int mode)
@@ -3840,20 +3955,33 @@ namespace RPGRewriter
             {
                 if (mode < FOLDERCOUNT) // For filenames, check that they exist.
                 {
+                    int checkMode = mode;
+                    string checkStr = str;
+                    if (str.IndexOf('\\') != -1 || str.IndexOf('/') != -1)
+                    {
+                        string prefix;
+                        int inferredMode;
+                        if (!TrySplitPathLikeValue(str, out prefix, out checkStr, out inferredMode))
+                            return;
+
+                        if (inferredMode >= 0)
+                            checkMode = inferredMode;
+                    }
+
                     if (includeActions) // Only check file validity if actions are included.
                     {
-                        if (str != "" && str != "(OFF)") // Not a file, used to turn off the music.
+                        if (checkStr != "" && checkStr != "(OFF)") // Not a file, used to turn off the music.
                         {
-                            DirectoryInfo root = new DirectoryInfo(gamePath + "\\" + FOLDER[mode]);
+                            DirectoryInfo root = new DirectoryInfo(gamePath + "\\" + FOLDER[checkMode]);
                             
                             // Folder doesn't exist, or no file matches the filename with any extension.
-                            if (!root.Exists || root.GetFiles(str + ".*").Length == 0)
+                            if (!root.Exists || root.GetFiles(checkStr + ".*").Length == 0)
                             {
-                                if (!missingFiles.ContainsKey(FOLDER[mode]))
-                                    missingFiles[FOLDER[mode]] = new List<string>();
+                                if (!missingFiles.ContainsKey(FOLDER[checkMode]))
+                                    missingFiles[FOLDER[checkMode]] = new List<string>();
                                 
-                                if (!missingFiles[FOLDER[mode]].Contains(str))
-                                    missingFiles[FOLDER[mode]].Add(str);
+                                if (!missingFiles[FOLDER[checkMode]].Contains(checkStr))
+                                    missingFiles[FOLDER[checkMode]].Add(checkStr);
                                 checkIssueReference = true;
                             }
                         }
@@ -3861,18 +3989,18 @@ namespace RPGRewriter
                     
                     if (checkUnusedFiles)
                     {
-                        if (unusedFilesLowercase.ContainsKey(FOLDER[mode]))
+                        if (unusedFilesLowercase.ContainsKey(FOLDER[checkMode]))
                         {
-                            if (unusedFilesLowercase[FOLDER[mode]].Contains(str.ToLower()))
+                            if (unusedFilesLowercase[FOLDER[checkMode]].Contains(checkStr.ToLower()))
                             {
-                                DirectoryInfo root = new DirectoryInfo(gamePath + "\\" + FOLDER[mode]);
+                                DirectoryInfo root = new DirectoryInfo(gamePath + "\\" + FOLDER[checkMode]);
                                 
                                 // Folder exists, and a file matches the filename with any extension.
-                                if (root.Exists && root.GetFiles(str + ".*").Length > 0)
+                                if (root.Exists && root.GetFiles(checkStr + ".*").Length > 0)
                                 {
-                                    int index = unusedFilesLowercase[FOLDER[mode]].IndexOf(str.ToLower());
-                                    unusedFiles[FOLDER[mode]].RemoveAt(index);
-                                    unusedFilesLowercase[FOLDER[mode]].RemoveAt(index);
+                                    int index = unusedFilesLowercase[FOLDER[checkMode]].IndexOf(checkStr.ToLower());
+                                    unusedFiles[FOLDER[checkMode]].RemoveAt(index);
+                                    unusedFilesLowercase[FOLDER[checkMode]].RemoveAt(index);
                                 }
                             }
                         }
@@ -3931,8 +4059,14 @@ namespace RPGRewriter
                 {
                     if (mode < FOLDERCOUNT) // Only a concern for filenames.
                     {
-                        if (!isValid(str)) // Invalid filename which has no replacement.
-                            logMessage(FOLDER[mode] + " replacement not found: " + str, true);
+                        string rewrittenPath = RewritePathLikeFilename(mode, str);
+                        if (rewrittenPath != str)
+                            str = rewrittenPath;
+                        else if (str.IndexOf('\\') == -1 && str.IndexOf('/') == -1)
+                        {
+                            if (!isValid(str)) // Invalid filename which has no replacement.
+                                logMessage(FOLDER[mode] + " replacement not found: " + str, true);
+                        }
                     }
                 }
             }

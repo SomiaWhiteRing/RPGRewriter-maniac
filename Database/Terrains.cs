@@ -139,7 +139,7 @@ namespace RPGRewriter
                     backgroundType = M.readLengthMultibyte(f);
                 
                 if (chunks.next(0x15))
-                    backgroundName = M.readStringAndRewrite(f, M.M_BACKDROP, M.S_FILENAME);
+                    backgroundName = M.readStringAndRewrite(f, M.M_FRAME, M.S_FILENAME);
                 if (chunks.next(0x16))
                     backgroundScrollH = M.readLengthBool(f);
                 if (chunks.next(0x17))
@@ -152,7 +152,7 @@ namespace RPGRewriter
                 if (chunks.next(0x1e))
                     useForeground = M.readLengthBool(f);
                 if (chunks.next(0x1f))
-                    foregroundName = M.readStringAndRewrite(f, M.M_BACKDROP, M.S_FILENAME);
+                    foregroundName = M.readStringAndRewrite(f, M.M_FRAME, M.S_FILENAME);
                 if (chunks.next(0x20))
                     foregroundScrollH = M.readLengthBool(f);
                 if (chunks.next(0x21))

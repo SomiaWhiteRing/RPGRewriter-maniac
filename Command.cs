@@ -315,6 +315,31 @@ namespace RPGRewriter
                 }
                 catch { }
 
+                // Picture command in Maniacs projects may store non-standard filename tokens:
+                // - bare basenames that actually belong to non-Picture folders
+                // - unknown nested paths where only basename should be rewritten
+                // Apply a cross-folder fallback so these runtime references survive file renames.
+                try
+                {
+                    if (opcode == C_PICTURE && !string.IsNullOrEmpty(stringArg))
+                    {
+                        if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
+                        {
+                            string rewrittenPictureArg = RewritePictureFilenameFallback(stringArg);
+                            if (rewrittenPictureArg != stringArg)
+                            {
+                                stringArg = rewrittenPictureArg;
+                                M.changesMade = true;
+                            }
+                        }
+                        else if (M.globalMode == "Checking")
+                        {
+                            CheckPictureFilenameFallback(stringArg);
+                        }
+                    }
+                }
+                catch { }
+
                 // Special-case: Maniacs 2003 "Show String Picture" (3007)
                 // The stringArg layout is: 0x01 + [display text] + 0x01 + [font] + 0x01 + [system graphic filename]
                 // - In Rewriting mode: rewrite the embedded System filename segment using the normal replacement list.
@@ -4255,6 +4280,138 @@ namespace RPGRewriter
                 catch { }
             }
             return replaced;
+        }
+
+        static bool TryGetMappedFilenameInMode(int mode, string sourceName, out string mappedName)
+        {
+            mappedName = sourceName;
+            if (mode < 0 || mode >= M.FOLDERCOUNT)
+                return false;
+            if (M.transList == null)
+                return false;
+            if (M.transList[mode, 0] == null || M.transList[mode, 1] == null)
+                return false;
+
+            int index = M.transList[mode, 0].IndexOf(sourceName);
+            if (index < 0 || index >= M.transList[mode, 1].Count)
+                return false;
+
+            string candidate = M.transList[mode, 1][index];
+            if (string.IsNullOrEmpty(candidate) || candidate == sourceName)
+                return false;
+
+            mappedName = candidate;
+            return true;
+        }
+
+        static bool TryGetMappedFilenameAcrossFolders(string sourceName, out string mappedName, out int mappedMode)
+        {
+            mappedName = sourceName;
+            mappedMode = -1;
+
+            for (int mode = 0; mode < M.FOLDERCOUNT; mode++)
+            {
+                string candidate;
+                if (!TryGetMappedFilenameInMode(mode, sourceName, out candidate))
+                    continue;
+
+                if (mappedMode == -1)
+                {
+                    mappedMode = mode;
+                    mappedName = candidate;
+                    continue;
+                }
+
+                // Ambiguous mapping to different targets across folders: do nothing.
+                if (mappedName != candidate)
+                {
+                    mappedMode = -1;
+                    mappedName = sourceName;
+                    return false;
+                }
+            }
+
+            return mappedMode != -1;
+        }
+
+        static bool FileExistsInMode(int mode, string baseName)
+        {
+            if (mode < 0 || mode >= M.FOLDERCOUNT || string.IsNullOrEmpty(baseName))
+                return false;
+
+            try
+            {
+                string dir = M.gamePath + "\\" + M.FOLDER[mode];
+                if (!Directory.Exists(dir))
+                    return false;
+                DirectoryInfo root = new DirectoryInfo(dir);
+                return root.GetFiles(baseName + ".*").Length > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        static string RewritePictureFilenameFallback(string rawValue)
+        {
+            if (string.IsNullOrEmpty(rawValue))
+                return rawValue;
+
+            string value = rawValue.Trim();
+            if (value == "")
+                return rawValue;
+
+            int slash = value.LastIndexOf('/');
+            int backslash = value.LastIndexOf('\\');
+            int sep = slash > backslash ? slash : backslash;
+
+            string prefix = sep >= 0 ? value.Substring(0, sep + 1) : "";
+            string baseName = sep >= 0 ? value.Substring(sep + 1) : value;
+            if (baseName == "")
+                return rawValue;
+
+            string mappedName;
+            int mappedMode;
+            if (!TryGetMappedFilenameAcrossFolders(baseName, out mappedName, out mappedMode))
+                return rawValue;
+
+            return prefix + mappedName;
+        }
+
+        static void CheckPictureFilenameFallback(string rawValue)
+        {
+            if (string.IsNullOrEmpty(rawValue))
+                return;
+
+            string value = rawValue.Trim();
+            if (value == "")
+                return;
+
+            int slash = value.LastIndexOf('/');
+            int backslash = value.LastIndexOf('\\');
+            int sep = slash > backslash ? slash : backslash;
+            string baseName = sep >= 0 ? value.Substring(sep + 1) : value;
+
+            if (baseName == "")
+                return;
+
+            if (FileExistsInMode(M.M_PICTURE, baseName))
+                return;
+
+            for (int mode = 0; mode < M.FOLDERCOUNT; mode++)
+                if (FileExistsInMode(mode, baseName))
+                    return;
+
+            string mappedName;
+            int mappedMode;
+            if (TryGetMappedFilenameAcrossFolders(baseName, out mappedName, out mappedMode) && mappedMode >= 0)
+            {
+                M.checkStringValidForMode(mappedName, mappedMode);
+                return;
+            }
+
+            M.checkStringValidForMode(baseName, M.M_PICTURE);
         }
 
         // Rewrites embedded resource paths like "../CharSet/NAME" or "Picture\\NAME" in free-form Maniacs strings.
