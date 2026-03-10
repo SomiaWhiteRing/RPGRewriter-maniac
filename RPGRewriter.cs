@@ -2641,6 +2641,25 @@ namespace RPGRewriter
             }
         }
         
+        static bool isInUnusedSubfolder(string rootPath, string filePath)
+        {
+            if (string.IsNullOrEmpty(rootPath) || string.IsNullOrEmpty(filePath))
+                return false;
+
+            string relative = filePath;
+            if (filePath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase))
+                relative = filePath.Substring(rootPath.Length);
+            relative = relative.TrimStart('\\', '/');
+            if (relative == "")
+                return false;
+
+            string[] parts = relative.Split(new char[] {'\\', '/'}, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+                if (parts[i].Equals("Unused", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+
         // Generates a list of files in the resource folders to help prepare an input file for Rewriting.
         static bool generateFilenames(string filepath, bool nonASCIIOnly = true)
         {
@@ -2653,26 +2672,33 @@ namespace RPGRewriter
                 // Go through every folder.
                 for (int i = 0; i < FOLDERCOUNT; i++)
                 {
-                    if (Directory.Exists(dir + "\\" + FOLDER[i]))
+                    string folderPath = Path.Combine(dir, FOLDER[i]);
+                    if (Directory.Exists(folderPath))
                     {
-                        bool headerWritten = false;
-                        IEnumerable<string> fileList = Directory.EnumerateFiles(dir + "\\" + FOLDER[i], "*.*");
+                        SortedSet<string> filenameSet = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                        IEnumerable<string> fileList = Directory.EnumerateFiles(folderPath, "*.*", SearchOption.AllDirectories);
                         foreach (string file in fileList)
                         {
+                            if (Path.GetFileName(file).Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            if (isInUnusedSubfolder(folderPath, file))
+                                continue;
+
                             string filename = Path.GetFileNameWithoutExtension(file);
                             if (!nonASCIIOnly || !isValid(filename))
+                                filenameSet.Add(filename);
+                        }
+
+                        if (filenameSet.Count > 0)
+                        {
+                            f.WriteLine("***" + FOLDER[i].ToUpper());
+                            foreach (string filename in filenameSet)
                             {
-                                if (!headerWritten)
-                                {
-                                    f.WriteLine("***" + FOLDER[i].ToUpper());
-                                    headerWritten = true;
-                                }
                                 f.WriteLine(filename);
                                 f.WriteLine("___");
                             }
-                        }
-                        if (headerWritten)
                             f.WriteLine();
+                        }
                     }
                 }
                 f.Close();
@@ -2979,7 +3005,8 @@ namespace RPGRewriter
             }
         }
         
-        // Renames files in all subfolders according to the loaded input file. Returns true if anything was actually renamed.
+        // Renames files in all resource folders (including subfolders) according to the loaded input file.
+        // Returns true if anything was actually renamed.
         static bool translateFilenames(string filepath)
         {
             string dir = Path.GetDirectoryName(filepath);
@@ -2995,10 +3022,19 @@ namespace RPGRewriter
                 if (Directory.Exists(folderPath))
                 {
                     bool renameExists = false;
-                    int maxLen = getSafeMaxBaseNameLength(folderPath);
-                    IEnumerable<string> fileList = Directory.EnumerateFiles(folderPath, "*.*");
+                    IEnumerable<string> fileList = Directory.EnumerateFiles(folderPath, "*.*", SearchOption.AllDirectories);
                     foreach (string file in fileList)
                     {
+                        if (Path.GetFileName(file).Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        if (isInUnusedSubfolder(folderPath, file))
+                            continue;
+
+                        string fileDir = Path.GetDirectoryName(file);
+                        if (string.IsNullOrEmpty(fileDir))
+                            fileDir = folderPath;
+                        int maxLen = getSafeMaxBaseNameLength(fileDir);
+
                         // If original list contains the filename, rename the file to the translation.
                         // The lists contain only names, so remove the path and keep the extension separate.
                         // Also, don't try to rename to an existing file - it'll throw an actual error if it tries.
@@ -3017,7 +3053,7 @@ namespace RPGRewriter
                                 Console.WriteLine("Renaming files in " + FOLDER[i] + " folder...");
                             }
                             string renamedName = transList[i, 1][transIndex];
-                            string resolvedName = resolveAvailableDestinationBaseName(i, fileName, renamedName, folderPath, fileExt, file, maxLen);
+                            string resolvedName = resolveAvailableDestinationBaseName(i, fileName, renamedName, fileDir, fileExt, file, maxLen);
                             if (resolvedName != renamedName)
                             {
                                 transList[i, 1][transIndex] = resolvedName;
@@ -3026,7 +3062,7 @@ namespace RPGRewriter
                             if (renamedName == fileName)
                                 continue;
 
-                            string destination = Path.Combine(folderPath, renamedName + fileExt);
+                            string destination = Path.Combine(fileDir, renamedName + fileExt);
                             if (string.Equals(file, destination, StringComparison.OrdinalIgnoreCase))
                                 continue;
 
@@ -3036,8 +3072,8 @@ namespace RPGRewriter
                                     File.Move(file, destination);
                                 else
                                 {
-                                    string fallbackName = resolveAvailableDestinationBaseName(i, fileName, buildHashedFilenameBase(i, fileName, renamedName), folderPath, fileExt, file, maxLen);
-                                    string fallbackDestination = Path.Combine(folderPath, fallbackName + fileExt);
+                                    string fallbackName = resolveAvailableDestinationBaseName(i, fileName, buildHashedFilenameBase(i, fileName, renamedName), fileDir, fileExt, file, maxLen);
+                                    string fallbackDestination = Path.Combine(fileDir, fallbackName + fileExt);
                                     if (!File.Exists(fallbackDestination) && !string.Equals(file, fallbackDestination, StringComparison.OrdinalIgnoreCase))
                                     {
                                         File.Move(file, fallbackDestination);
@@ -3053,8 +3089,8 @@ namespace RPGRewriter
                             }
                             catch (PathTooLongException)
                             {
-                                string fallbackName = resolveAvailableDestinationBaseName(i, fileName, buildHashedFilenameBase(i, fileName, renamedName), folderPath, fileExt, file, maxLen);
-                                string fallbackDestination = Path.Combine(folderPath, fallbackName + fileExt);
+                                string fallbackName = resolveAvailableDestinationBaseName(i, fileName, buildHashedFilenameBase(i, fileName, renamedName), fileDir, fileExt, file, maxLen);
+                                string fallbackDestination = Path.Combine(fileDir, fallbackName + fileExt);
                                 try
                                 {
                                     if (!File.Exists(fallbackDestination) && !string.Equals(file, fallbackDestination, StringComparison.OrdinalIgnoreCase))
@@ -3928,6 +3964,43 @@ namespace RPGRewriter
             return true;
         }
 
+        static string buildAsciiUEscapedName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return name;
+
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in name)
+            {
+                if (c <= 0x7F)
+                    sb.Append(c);
+                else
+                    sb.Append('u').Append(((int)c).ToString("x4"));
+            }
+            return sb.ToString();
+        }
+
+        static bool FileExistsInMode(int mode, string baseName, bool includeSubfolders = false)
+        {
+            if (mode < 0 || mode >= FOLDERCOUNT || string.IsNullOrEmpty(baseName))
+                return false;
+
+            try
+            {
+                string dir = Path.Combine(gamePath, FOLDER[mode]);
+                if (!Directory.Exists(dir))
+                    return false;
+
+                DirectoryInfo root = new DirectoryInfo(dir);
+                SearchOption option = includeSubfolders? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+                return root.GetFiles(baseName + ".*", option).Length > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         static string RewritePathLikeFilename(int mode, string value)
         {
             string prefix;
@@ -3945,6 +4018,13 @@ namespace RPGRewriter
             if (TryGetMappedFilenameAcrossFolders(baseName, out mappedName, out mappedMode))
                 return prefix + mappedName;
 
+            if (!isValid(baseName))
+            {
+                string asciiCandidate = buildAsciiUEscapedName(baseName);
+                if (asciiCandidate != baseName && FileExistsInMode(effectiveMode, asciiCandidate, true))
+                    return prefix + asciiCandidate;
+            }
+
             return value;
         }
         
@@ -3957,8 +4037,10 @@ namespace RPGRewriter
                 {
                     int checkMode = mode;
                     string checkStr = str;
+                    bool isPathLike = false;
                     if (str.IndexOf('\\') != -1 || str.IndexOf('/') != -1)
                     {
+                        isPathLike = true;
                         string prefix;
                         int inferredMode;
                         if (!TrySplitPathLikeValue(str, out prefix, out checkStr, out inferredMode))
@@ -3972,10 +4054,8 @@ namespace RPGRewriter
                     {
                         if (checkStr != "" && checkStr != "(OFF)") // Not a file, used to turn off the music.
                         {
-                            DirectoryInfo root = new DirectoryInfo(gamePath + "\\" + FOLDER[checkMode]);
-                            
                             // Folder doesn't exist, or no file matches the filename with any extension.
-                            if (!root.Exists || root.GetFiles(checkStr + ".*").Length == 0)
+                            if (!FileExistsInMode(checkMode, checkStr, isPathLike))
                             {
                                 if (!missingFiles.ContainsKey(FOLDER[checkMode]))
                                     missingFiles[FOLDER[checkMode]] = new List<string>();
@@ -3993,10 +4073,8 @@ namespace RPGRewriter
                         {
                             if (unusedFilesLowercase[FOLDER[checkMode]].Contains(checkStr.ToLower()))
                             {
-                                DirectoryInfo root = new DirectoryInfo(gamePath + "\\" + FOLDER[checkMode]);
-                                
                                 // Folder exists, and a file matches the filename with any extension.
-                                if (root.Exists && root.GetFiles(checkStr + ".*").Length > 0)
+                                if (FileExistsInMode(checkMode, checkStr, isPathLike))
                                 {
                                     int index = unusedFilesLowercase[FOLDER[checkMode]].IndexOf(checkStr.ToLower());
                                     unusedFiles[FOLDER[checkMode]].RemoveAt(index);
