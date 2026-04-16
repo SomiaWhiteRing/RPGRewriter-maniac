@@ -374,9 +374,10 @@ namespace RPGRewriter
             }
             
             StringWriter encounterList = new StringWriter(new StringBuilder());
-            
-            foreach (MapTreeEncounter encounter in encounters)
-                encounterList.WriteLine(encounter.getString());
+
+            if (encounters != null)
+                foreach (MapTreeEncounter encounter in encounters)
+                    encounterList.WriteLine(encounter.getString());
             
             mapTreeText.WriteLine("Map #" + id);
             if (M.includeMessages)

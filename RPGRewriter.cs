@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Windows.Forms;
 using Newtonsoft.Json;
@@ -159,6 +160,7 @@ namespace RPGRewriter
         // General variables for rewriting.
         public static BinaryWriter targetWriter;
         public static List<string>[,] transList;
+        public static Dictionary<string, int>[] transSourceIndexByMode;
         public static string lastInputFile = "N/A";
         public static bool changesMade = false;
         
@@ -2218,10 +2220,16 @@ namespace RPGRewriter
             
             // Create empty original and translation lists for all types.
             transList = new List<string>[MODECOUNT, 2];
+            transSourceIndexByMode = new Dictionary<string, int>[MODECOUNT];
+            HashSet<string>[] seenSourceByMode = new HashSet<string>[MODECOUNT];
+            HashSet<string>[] seenTranslationByMode = new HashSet<string>[MODECOUNT];
             for (int i = 0; i < MODECOUNT; i++)
             {
                 transList[i, 0] = new List<string>();
                 transList[i, 1] = new List<string>();
+                transSourceIndexByMode[i] = new Dictionary<string, int>(StringComparer.Ordinal);
+                seenSourceByMode[i] = new HashSet<string>(StringComparer.Ordinal);
+                seenTranslationByMode[i] = new HashSet<string>(StringComparer.Ordinal);
             }
             
             lastInputFile = "N/A";
@@ -2268,10 +2276,13 @@ namespace RPGRewriter
                                 {
                                     // Warn the user if an entry appears twice, but always add it.
                                     // The translation could differ and thus get added, throwing everything off.
-                                    if (transList[mode, 0].Contains(line))
+                                    if (seenSourceByMode[mode].Contains(line))
                                         Console.WriteLine("Warning! " + line + " was added twice under " + FOLDER[mode] + "! This is redundant.");
-                                    
+
+                                    seenSourceByMode[mode].Add(line);
                                     transList[mode, 0].Add(line);
+                                    if (!transSourceIndexByMode[mode].ContainsKey(line))
+                                        transSourceIndexByMode[mode][line] = transList[mode, 0].Count - 1;
                                 }
                                 else // Translation
                                 {
@@ -2282,14 +2293,15 @@ namespace RPGRewriter
                                         Console.WriteLine("Warning! " + line + " is not a valid filename! It will not be properly renamed.");
                                     
                                     // Notify the user if an entry appears twice.
-                                    if (transList[mode, 1].Contains(line))
+                                    if (seenTranslationByMode[mode].Contains(line))
                                     {
                                         if (mode < FOLDERCOUNT) // In a folder mode, meaning same-filename is possible.
                                             Console.WriteLine("Warning! " + line + " was added twice under " + FOLDER[mode] + "! This may cause filename overlap.");
                                         else // In a message mode, meaning it could be intentional.
                                             Console.WriteLine(line + " was added twice under " + FOLDER[mode] + ".");
                                     }
-                                    
+
+                                    seenTranslationByMode[mode].Add(line);
                                     transList[mode, 1].Add(line);
                                 }
                                 transToggle = !transToggle;
@@ -2307,6 +2319,24 @@ namespace RPGRewriter
                 Console.WriteLine(filename + ".txt not found. No replacement list loaded.");
             
             enterToContinue();
+        }
+
+        static int GetTranslationIndexInMode(int mode, string sourceName)
+        {
+            if (mode < 0 || mode >= MODECOUNT || string.IsNullOrEmpty(sourceName))
+                return -1;
+
+            if (transSourceIndexByMode != null && transSourceIndexByMode[mode] != null)
+            {
+                int index;
+                if (transSourceIndexByMode[mode].TryGetValue(sourceName, out index))
+                    return index;
+            }
+
+            if (transList == null || transList[mode, 0] == null)
+                return -1;
+
+            return transList[mode, 0].IndexOf(sourceName);
         }
         
         // Loads user settings file. Option settings are only loaded once on startup, while others can be updated mid-program.
@@ -2776,6 +2806,30 @@ namespace RPGRewriter
             return code.ToString();
         }
 
+        static string normalizeResourceDirectorySegment(string segment)
+        {
+            if (string.IsNullOrEmpty(segment) || segment == "." || segment == "..")
+                return segment;
+
+            if (isValid(segment) && isValidFilename(segment) && !isReservedWindowsFilename(segment))
+                return segment;
+
+            string candidate = buildAsciiUEscapedName(segment.Trim());
+            if (candidate == "")
+                candidate = "DIR_" + getStableHashHex("DIR|" + segment).Substring(0, 10);
+
+            if (!isValidFilename(candidate) || isReservedWindowsFilename(candidate))
+            {
+                string normalized = normalizeResourceFilenameBase(candidate);
+                if (normalized != "" && isValidFilename(normalized) && !isReservedWindowsFilename(normalized))
+                    candidate = normalized;
+                else
+                    candidate = "DIR_" + getStableHashHex("DIR|" + segment).Substring(0, 10);
+            }
+
+            return candidate;
+        }
+
         static bool isReservedWindowsFilename(string name)
         {
             if (string.IsNullOrEmpty(name))
@@ -2934,6 +2988,96 @@ namespace RPGRewriter
             return buildHashedFilenameBase(mode, sourceName, desiredName);
         }
 
+        static string resolveAvailableDestinationDirectoryName(string parentDir, string sourceName, string currentDir)
+        {
+            string normalized = normalizeResourceDirectorySegment(sourceName);
+            if (normalized == "")
+                normalized = "DIR_" + getStableHashHex(parentDir + "|" + sourceName).Substring(0, 10);
+
+            string currentName = Path.GetFileName(currentDir);
+            if (normalized == currentName)
+                return normalized;
+
+            string candidate = normalized;
+            for (int suffixNum = 0; suffixNum < 10000; suffixNum++)
+            {
+                if (suffixNum > 0)
+                    candidate = normalized + "_" + suffixNum;
+
+                string destination = Path.Combine(parentDir, candidate);
+                if (string.Equals(destination, currentDir, StringComparison.OrdinalIgnoreCase))
+                    return candidate;
+                if (destination.Length >= NORMALIZED_PATH_LIMIT)
+                    continue;
+                if (!Directory.Exists(destination))
+                    return candidate;
+            }
+
+            return "DIR_" + getStableHashHex(parentDir + "|" + sourceName).Substring(0, 10);
+        }
+
+        static bool translateResourceSubdirectories(string dir)
+        {
+            bool anyRenameExists = false;
+
+            for (int mode = 0; mode < FOLDERCOUNT; mode++)
+            {
+                string folderPath = Path.Combine(dir, FOLDER[mode]);
+                if (!Directory.Exists(folderPath))
+                    continue;
+
+                bool renameExists = false;
+                List<string> dirList = Directory.EnumerateDirectories(folderPath, "*", SearchOption.AllDirectories)
+                    .OrderByDescending(path => path.Length)
+                    .ToList();
+
+                foreach (string currentDir in dirList)
+                {
+                    if (isInUnusedSubfolder(folderPath, currentDir))
+                        continue;
+
+                    string currentName = Path.GetFileName(currentDir);
+                    string renamedName = normalizeResourceDirectorySegment(currentName);
+                    if (renamedName == currentName)
+                        continue;
+
+                    string parentDir = Path.GetDirectoryName(currentDir);
+                    if (string.IsNullOrEmpty(parentDir))
+                        continue;
+
+                    renamedName = resolveAvailableDestinationDirectoryName(parentDir, currentName, currentDir);
+                    if (renamedName == currentName)
+                        continue;
+
+                    if (!renameExists)
+                    {
+                        renameExists = true;
+                        anyRenameExists = true;
+                        Console.WriteLine("Renaming subdirectories in " + FOLDER[mode] + " folder...");
+                    }
+
+                    string destination = Path.Combine(parentDir, renamedName);
+                    try
+                    {
+                        if (!Directory.Exists(destination))
+                            Directory.Move(currentDir, destination);
+                        else
+                            Console.WriteLine("Cannot rename directory " + currentDir + " to " + destination + ". A directory with that name already exists.");
+                    }
+                    catch (IOException e)
+                    {
+                        Console.WriteLine("Cannot rename directory " + currentDir + " to " + destination + ". " + e.Message);
+                    }
+                    catch (UnauthorizedAccessException e)
+                    {
+                        Console.WriteLine("Cannot rename directory " + currentDir + " to " + destination + ". " + e.Message);
+                    }
+                }
+            }
+
+            return anyRenameExists;
+        }
+
         static void normalizeFilenameTranslationsForDirectory(string dir)
         {
             if (transList == null)
@@ -3011,9 +3155,13 @@ namespace RPGRewriter
         {
             string dir = Path.GetDirectoryName(filepath);
             bool anyRenameExists = false;
-            
-            normalizeFilenameTranslationsForDirectory(dir);
+
             Console.WriteLine("Renaming files...");
+
+            if (translateResourceSubdirectories(dir))
+                anyRenameExists = true;
+
+            normalizeFilenameTranslationsForDirectory(dir);
             
             // Go through every folder.
             for (int i = 0; i < FOLDERCOUNT; i++)
@@ -3040,10 +3188,10 @@ namespace RPGRewriter
                         // Also, don't try to rename to an existing file - it'll throw an actual error if it tries.
                         string fileName = Path.GetFileNameWithoutExtension(file);
                         string fileExt = Path.GetExtension(file);
-                        if (transList[i, 0].Contains(fileName))
+                        int transIndex = GetTranslationIndexInMode(i, fileName);
+                        if (transIndex >= 0)
                         {
-                            int transIndex = transList[i, 0].IndexOf(fileName);
-                            if (transIndex < 0 || transIndex >= transList[i, 1].Count)
+                            if (transIndex >= transList[i, 1].Count)
                                 continue;
 
                             if (!renameExists)
@@ -3877,7 +4025,7 @@ namespace RPGRewriter
             if (transList[mode, 0] == null || transList[mode, 1] == null)
                 return false;
 
-            int index = transList[mode, 0].IndexOf(sourceName);
+            int index = GetTranslationIndexInMode(mode, sourceName);
             if (index < 0 || index >= transList[mode, 1].Count)
                 return false;
 
@@ -3980,6 +4128,70 @@ namespace RPGRewriter
             return sb.ToString();
         }
 
+        static string RewritePathDirectoryPrefix(int mode, string prefix, bool hasExplicitRootFolder)
+        {
+            if (mode < 0 || mode >= FOLDERCOUNT || string.IsNullOrEmpty(prefix))
+                return prefix;
+
+            char separator = prefix.IndexOf('\\') != -1? '\\' : '/';
+            string normalized = prefix.Replace('\\', '/');
+            bool trailingSeparator = normalized.EndsWith("/");
+            string[] split = normalized.Split(new char[] {'/'}, StringSplitOptions.RemoveEmptyEntries);
+            if (split.Length == 0)
+                return prefix;
+
+            List<string> parts = new List<string>(split);
+            int rewriteStart = 0;
+            if (hasExplicitRootFolder)
+            {
+                for (int i = parts.Count - 1; i >= 0; i--)
+                    if (FOLDER[mode].Equals(parts[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        rewriteStart = i + 1;
+                        break;
+                    }
+            }
+
+            for (int i = rewriteStart; i < parts.Count; i++)
+            {
+                if (parts[i] == "." || parts[i] == "..")
+                    continue;
+                parts[i] = normalizeResourceDirectorySegment(parts[i]);
+            }
+
+            string rewritten = string.Join(separator.ToString(), parts.ToArray());
+            if (rewritten != "" && trailingSeparator)
+                rewritten += separator;
+            return rewritten;
+        }
+
+        static string ExtractModeRelativePath(string value, int mode, bool hasExplicitRootFolder)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value;
+
+            string normalized = value.Replace('\\', '/');
+            string[] split = normalized.Split(new char[] {'/'}, StringSplitOptions.RemoveEmptyEntries);
+            if (split.Length == 0)
+                return value;
+
+            int start = 0;
+            if (hasExplicitRootFolder)
+            {
+                for (int i = split.Length - 1; i >= 0; i--)
+                    if (FOLDER[mode].Equals(split[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        start = i + 1;
+                        break;
+                    }
+            }
+
+            if (start >= split.Length)
+                return "";
+
+            return string.Join("\\", split.Skip(start).ToArray());
+        }
+
         static bool FileExistsInMode(int mode, string baseName, bool includeSubfolders = false)
         {
             if (mode < 0 || mode >= FOLDERCOUNT || string.IsNullOrEmpty(baseName))
@@ -4001,6 +4213,37 @@ namespace RPGRewriter
             }
         }
 
+        static bool FileExistsRelativePathInMode(int mode, string relativePath)
+        {
+            if (mode < 0 || mode >= FOLDERCOUNT || string.IsNullOrEmpty(relativePath))
+                return false;
+
+            try
+            {
+                string dir = Path.Combine(gamePath, FOLDER[mode]);
+                if (!Directory.Exists(dir))
+                    return false;
+
+                string normalized = relativePath.Replace('/', '\\');
+                string baseName = Path.GetFileName(normalized);
+                if (string.IsNullOrEmpty(baseName))
+                    return false;
+
+                string relativeDir = Path.GetDirectoryName(normalized);
+                if (!string.IsNullOrEmpty(relativeDir))
+                    dir = Path.Combine(dir, relativeDir);
+
+                if (!Directory.Exists(dir))
+                    return false;
+
+                return Directory.EnumerateFiles(dir, baseName + ".*", SearchOption.TopDirectoryOnly).Any();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         static string RewritePathLikeFilename(int mode, string value)
         {
             string prefix;
@@ -4011,19 +4254,23 @@ namespace RPGRewriter
 
             string mappedName;
             int effectiveMode = inferredMode >= 0? inferredMode : mode;
+            string rewrittenPrefix = RewritePathDirectoryPrefix(effectiveMode, prefix, inferredMode >= 0);
             if (TryGetMappedFilenameInMode(effectiveMode, baseName, out mappedName))
-                return prefix + mappedName;
+                return rewrittenPrefix + mappedName;
 
             int mappedMode;
             if (TryGetMappedFilenameAcrossFolders(baseName, out mappedName, out mappedMode))
-                return prefix + mappedName;
+                return rewrittenPrefix + mappedName;
 
             if (!isValid(baseName))
             {
                 string asciiCandidate = buildAsciiUEscapedName(baseName);
                 if (asciiCandidate != baseName && FileExistsInMode(effectiveMode, asciiCandidate, true))
-                    return prefix + asciiCandidate;
+                    return rewrittenPrefix + asciiCandidate;
             }
+
+            if (rewrittenPrefix != prefix)
+                return rewrittenPrefix + baseName;
 
             return value;
         }
@@ -4038,6 +4285,7 @@ namespace RPGRewriter
                     int checkMode = mode;
                     string checkStr = str;
                     bool isPathLike = false;
+                    string relativePath = "";
                     if (str.IndexOf('\\') != -1 || str.IndexOf('/') != -1)
                     {
                         isPathLike = true;
@@ -4048,6 +4296,8 @@ namespace RPGRewriter
 
                         if (inferredMode >= 0)
                             checkMode = inferredMode;
+
+                        relativePath = ExtractModeRelativePath(str, checkMode, inferredMode >= 0);
                     }
 
                     if (includeActions) // Only check file validity if actions are included.
@@ -4055,7 +4305,8 @@ namespace RPGRewriter
                         if (checkStr != "" && checkStr != "(OFF)") // Not a file, used to turn off the music.
                         {
                             // Folder doesn't exist, or no file matches the filename with any extension.
-                            if (!FileExistsInMode(checkMode, checkStr, isPathLike))
+                            bool exists = isPathLike? FileExistsRelativePathInMode(checkMode, relativePath) : FileExistsInMode(checkMode, checkStr, false);
+                            if (!exists)
                             {
                                 if (!missingFiles.ContainsKey(FOLDER[checkMode]))
                                     missingFiles[FOLDER[checkMode]] = new List<string>();
@@ -4074,7 +4325,8 @@ namespace RPGRewriter
                             if (unusedFilesLowercase[FOLDER[checkMode]].Contains(checkStr.ToLower()))
                             {
                                 // Folder exists, and a file matches the filename with any extension.
-                                if (FileExistsInMode(checkMode, checkStr, isPathLike))
+                                bool exists = isPathLike? FileExistsRelativePathInMode(checkMode, relativePath) : FileExistsInMode(checkMode, checkStr, false);
+                                if (exists)
                                 {
                                     int index = unusedFilesLowercase[FOLDER[checkMode]].IndexOf(checkStr.ToLower());
                                     unusedFiles[FOLDER[checkMode]].RemoveAt(index);
@@ -4131,8 +4383,9 @@ namespace RPGRewriter
             }
             else // Must match string exactly
             {
-                if (mySourceList.Contains(str))
-                    str = myTransList[mySourceList.IndexOf(str)];
+                int exactIndex = mode < FOLDERCOUNT? GetTranslationIndexInMode(mode, str) : mySourceList.IndexOf(str);
+                if (exactIndex >= 0 && exactIndex < myTransList.Count)
+                    str = myTransList[exactIndex];
                 else
                 {
                     if (mode < FOLDERCOUNT) // Only a concern for filenames.
@@ -5745,33 +5998,44 @@ namespace RPGRewriter
             {
                 logExists = true;
                 string logFile = userSettingsStr["LogFilename"];
-                
-                if (globalMode == "Rewriting")
-                    Console.WriteLine("Translations were not found for some non-ASCII filenames.\nWrite missing translations to " + logFile + ".txt? (Y/N)");
-                else if (globalMode == "Checking")
+
+                bool shouldWriteLog = false;
+                if (commandLineMode)
                 {
-                    string checkContents = "";
-                    if (checkIssueReference)
-                        checkContents += "- References to non-existent files\n";
-                    if (checkIssueUnusedFile)
-                        checkContents += "- Unused files in resource folders\n";
-                    if (checkIssueUnusedDatabase)
-                        checkContents += "- Never-referenced database entries\n";
-                    if (checkIssueMessage)
-                        checkContents += "- Messages with non-ASCII characters\n";
-                    if (checkIssueOverflow)
-                        checkContents += "- Message overflow\n";
-                    Console.WriteLine("Issues found.\n" + checkContents + "Write issues to " + logFile + ".txt? (Y/N)");
+                    if (logFile != "" && !logFile.Equals("null", StringComparison.OrdinalIgnoreCase))
+                        shouldWriteLog = true;
                 }
-                else if (comparisonMode)
+                else
                 {
-                    if (!completenessMode)
-                        Console.WriteLine("Found inconsistencies in string translations.\nWrite to " + logFile + ".txt? (Y/N)");
-                    else
-                        Console.WriteLine("Found unchanged messages.\nWrite to " + logFile + ".txt? (Y/N)");
+                    if (globalMode == "Rewriting")
+                        Console.WriteLine("Translations were not found for some non-ASCII filenames.\nWrite missing translations to " + logFile + ".txt? (Y/N)");
+                    else if (globalMode == "Checking")
+                    {
+                        string checkContents = "";
+                        if (checkIssueReference)
+                            checkContents += "- References to non-existent files\n";
+                        if (checkIssueUnusedFile)
+                            checkContents += "- Unused files in resource folders\n";
+                        if (checkIssueUnusedDatabase)
+                            checkContents += "- Never-referenced database entries\n";
+                        if (checkIssueMessage)
+                            checkContents += "- Messages with non-ASCII characters\n";
+                        if (checkIssueOverflow)
+                            checkContents += "- Message overflow\n";
+                        Console.WriteLine("Issues found.\n" + checkContents + "Write issues to " + logFile + ".txt? (Y/N)");
+                    }
+                    else if (comparisonMode)
+                    {
+                        if (!completenessMode)
+                            Console.WriteLine("Found inconsistencies in string translations.\nWrite to " + logFile + ".txt? (Y/N)");
+                        else
+                            Console.WriteLine("Found unchanged messages.\nWrite to " + logFile + ".txt? (Y/N)");
+                    }
+
+                    shouldWriteLog = yesNoPrompt();
                 }
-                
-                if (yesNoPrompt())
+
+                if (shouldWriteLog)
                 {
                     StringWriter str = new StringWriter(new StringBuilder());
                     foreach (string s in logStrings)

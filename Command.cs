@@ -4371,6 +4371,13 @@ namespace RPGRewriter
             if (baseName == "")
                 return rawValue;
 
+            if (sep >= 0)
+            {
+                string rewrittenPath = M.rewriteString(M.M_PICTURE, value);
+                if (rewrittenPath != value)
+                    return rewrittenPath;
+            }
+
             string mappedName;
             int mappedMode;
             if (!TryGetMappedFilenameAcrossFolders(baseName, out mappedName, out mappedMode))
@@ -4391,6 +4398,11 @@ namespace RPGRewriter
             int slash = value.LastIndexOf('/');
             int backslash = value.LastIndexOf('\\');
             int sep = slash > backslash ? slash : backslash;
+            if (sep >= 0)
+            {
+                M.checkStringValidForMode(value, M.M_PICTURE);
+                return;
+            }
             string baseName = sep >= 0 ? value.Substring(sep + 1) : value;
 
             if (baseName == "")
@@ -4422,26 +4434,31 @@ namespace RPGRewriter
             // (?i) case-insensitive; optional ../ or .\; folder from known set; slash or backslash; capture base name
             string pattern = @"(?i)(?<rel>(?:\.\./|\.\\)?)" +
                              @"(?<folder>Backdrop|Battle|Battle2|BattleCharSet|BattleWeapon|CharSet|ChipSet|FaceSet|Frame|GameOver|Monster|Movie|Music|Panorama|Picture|Sound|System2?|Title)" +
-                             @"[\\/]+(?<name>[^ \t\r\n/\\]+)";
+                             @"[\\/]+(?<name>[^ \t\r\n]+)";
 
             string updated = Regex.Replace(text, pattern, match =>
             {
                 string rel = match.Groups["rel"].Value; // preserve relative prefix (e.g., ../)
                 string folder = match.Groups["folder"].Value;
-                string baseName = match.Groups["name"].Value;
+                string relativePath = match.Groups["name"].Value;
 
                 if (M.globalMode == "Checking")
                 {
                     int mode;
                     if (FolderModeMap.TryGetValue(folder, out mode))
-                        M.checkStringValidForMode(baseName, mode);
+                        M.checkStringValidForMode(relativePath, mode);
                     return match.Value; // do not alter in Checking
                 }
 
                 if (M.globalMode == "Rewriting" || (M.globalMode == "Extracting" && M.useRewrittenStrings))
                 {
-                    string replaced = ReplaceBaseNameForFolder(folder, baseName);
-                    if (replaced != baseName)
+                    int mode;
+                    string replaced = relativePath;
+                    if (FolderModeMap.TryGetValue(folder, out mode))
+                        replaced = M.rewriteString(mode, relativePath);
+                    else
+                        replaced = ReplaceBaseNameForFolder(folder, relativePath);
+                    if (replaced != relativePath)
                         M.changesMade = true;
                     // Normalize separator to '/'
                     return rel + folder + "/" + replaced;
