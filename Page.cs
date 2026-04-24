@@ -14,6 +14,7 @@ namespace RPGRewriter
         int charDir = 2; // 17
         int charPattern = 1; // 18
         bool transparent = false; // 19
+        byte[] extensionChunk1B; // 1b, preserve unsupported page extension data
         int moveType = 1; // 1f
         int moveFrequency = 3; // 20
         int startTrigger = 0; // 21
@@ -68,6 +69,8 @@ namespace RPGRewriter
                 charPattern = M.readLengthMultibyte(f);
             if (chunks.next(0x19))
                 transparent = M.readLengthBool(f);
+            if (chunks.next(0x1b))
+                extensionChunk1B = M.skipLengthBytes(f);
             
             if (chunks.next(0x1f))
                 moveType = M.readLengthMultibyte(f);
@@ -200,6 +203,13 @@ namespace RPGRewriter
                 M.writeLengthMultibyte(charPattern);
             if (chunks.wasNext(0x19))
                 M.writeLengthBool(transparent);
+            if (chunks.wasNext(0x1b))
+            {
+                int length = extensionChunk1B != null? extensionChunk1B.Length : 0;
+                M.writeMultibyte(length);
+                if (length > 0)
+                    M.writeByteArrayNoLength(extensionChunk1B);
+            }
             
             if (chunks.wasNext(0x1f))
                 M.writeLengthMultibyte(moveType);
@@ -367,6 +377,7 @@ namespace RPGRewriter
     class PageCustomRoute : RPGData
     {
         MoveRoute moveRoute; // 0b length, 0c content
+        byte[] moveRouteTrailingBytes; // Bytes left inside 0x0c payload after parsing known route steps
         bool moveRepeat = true; // 15
         bool moveIgnore = false; // 16
         
@@ -394,8 +405,14 @@ namespace RPGRewriter
             if (chunks.next(0x0c))
             {
                 int moveLength = M.readMultibyte(f);
+                long routeEnd = f.Position + moveLength;
                 if (moveLength > 0)
+                {
                     moveRoute = new MoveRoute(f, moveLength, "Custom");
+                    int trailingByteCount = (int)(routeEnd - f.Position);
+                    if (trailingByteCount > 0)
+                        moveRouteTrailingBytes = M.skipBytes(f, trailingByteCount);
+                }
             }
             
             if (chunks.next(0x15))
@@ -430,6 +447,8 @@ namespace RPGRewriter
         public void write()
         {
             int moveLength = moveRoute != null? moveRoute.getLength() : 0;
+            int trailingByteCount = moveRouteTrailingBytes != null? moveRouteTrailingBytes.Length : 0;
+            moveLength += trailingByteCount;
             
             int totalMoveLength = 0;
             if (chunks.used(0x0b))
@@ -458,7 +477,11 @@ namespace RPGRewriter
             {
                 M.writeMultibyte(moveLength);
                 if (moveLength > 0)
+                {
                     moveRoute.write();
+                    if (trailingByteCount > 0)
+                        M.writeByteArrayNoLength(moveRouteTrailingBytes);
+                }
             }
             
             if (chunks.wasNext(0x15))

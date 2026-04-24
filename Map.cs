@@ -43,6 +43,7 @@ namespace RPGRewriter
         List<Event> events = new List<Event>(); // 51 - 初始化为空列表
         int saveCount2003E = 0; // 5a, verbose only
         int saveCount = 0; // 5b, verbose only
+        bool hadEventRecovery = false;
         
         static string myClass = "Map";
         Chunks chunks;
@@ -180,6 +181,7 @@ namespace RPGRewriter
                         // *** 关键安全检查：在尝试加载前，确保起始位置有效 ***
                         if (eventStartPos >= safeEndOfChunk) // 使用安全边界
                         {
+                            hadEventRecovery = true;
                             M.logMessage("Warning: Map " + id + " Event index " + i + ": Start position " + M.hexParen(eventStartPos) + " is at or beyond safe chunk end " + M.hexParen(safeEndOfChunk) + ". Stopping event read.");
                             break; // 停止读取
                         }
@@ -234,6 +236,8 @@ namespace RPGRewriter
                         }
 
                         bool overallSuccess = !internalLoadThrewException && tailByteCheckPassed && currentEvent != null && currentEvent.IsSuccessfullyLoaded;
+                        if (!overallSuccess || recoveryNeeded)
+                            hadEventRecovery = true;
 
                         if (overallSuccess) {
                             events.Add(currentEvent);
@@ -444,6 +448,12 @@ namespace RPGRewriter
         // Saves map file from stored data.
         public bool writeFile()
         {
+            if (hadEventRecovery)
+            {
+                Console.WriteLine(filename + " had event parse recovery/warnings; refusing to save to avoid corrupting the map.");
+                return false;
+            }
+
             if (M.fileInUse(filepath))
             {
                 Console.WriteLine(filename + " is in use; cannot save.");
