@@ -986,6 +986,12 @@ namespace RPGRewriter
                                 case "checklength": checkLineLength = value; break;
                                 case "isolateunused": cmdIsolateUnusedFiles = value; break;
                                 case "verbose": superVerboseStrings = value; break;
+                                case "mapnames": setExtraneousSetting("MapNames", value); break;
+                                case "mapeventnames": setExtraneousSetting("MapEventNames", value); break;
+                                case "switchnames": setExtraneousSetting("SwitchNames", value); break;
+                                case "variablenames": setExtraneousSetting("VariableNames", value); break;
+                                case "commoneventnames": setExtraneousSetting("CommonEventNames", value); break;
+                                case "troopnames": setExtraneousSetting("TroopNames", value); break;
                                 case "w": case "completeness": cmdCompletenessReplacement = value; break;
                                 case "f": case "filelist": cmdFileListNonASCII = value; break;
                             }
@@ -2559,6 +2565,17 @@ namespace RPGRewriter
         public static bool getExtraneousSetting(string setting)
         {
             return userSettings["StringScriptExtraneous"] == 1 && extraneousSettings.Contains(setting);
+        }
+
+        // CLI item flags enable the existing master gate without changing unrelated items.
+        static void setExtraneousSetting(string setting, bool enabled)
+        {
+            extraneousSettings.RemoveAll(item => item == setting);
+            if (enabled)
+            {
+                extraneousSettings.Add(setting);
+                userSettings["StringScriptExtraneous"] = 1;
+            }
         }
         
         // When exporting StirngScripts with original string setting enabled, either gets original string from database, or adds string from data to database.

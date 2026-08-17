@@ -760,6 +760,14 @@ Enables isolation of unused files to "Unused" subfolders for Checking.
 -verbose [Y/N]
 Enables verbose strings for Extracting.
 
+-mapnames [Y/N]
+-mapeventnames [Y/N]
+-switchnames [Y/N]
+-variablenames [Y/N]
+-commoneventnames [Y/N]
+-troopnames [Y/N]
+Controls whether the corresponding editor-only names are included when exporting editable StringScripts. Enabling any one of these options also enables extraneous string export for that run.
+
 -nolimit [0-2]
 Setting for character limits on database strings when using Import Editable StringScripts. 0 enforces limits, 1 does not, 2 enforces them except for battle strings that use placeholder codes.
 
