@@ -28,7 +28,7 @@ namespace RPGRewriter
             
             if (M.stringScriptExportMode)
             {
-                if (M.getExtraneousSetting("SwitchNames"))
+                if (M.getExtraneousSetting("VariableNames"))
                 {
                     for (int i = 0; i < variables.Count; i++)
                         tabText.WriteLine(M.databaseExportString((i + 1).ToString("D4"), variables[i].getString()));
