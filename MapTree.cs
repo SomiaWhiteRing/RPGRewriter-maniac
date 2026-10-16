@@ -262,7 +262,7 @@ namespace RPGRewriter
         string mapName = ""; // 01
         int openStatus = 0; // 02
         int mapIndent = 0; // 03
-        bool isMap = false; // 04
+        int mapType = 0; // 04: 0 = root/folder, 1 = map, 2 = area
         int xScroll = 0; // 05
         int yScroll = 0; // 06
         bool hasChildren = false; // 07
@@ -283,6 +283,7 @@ namespace RPGRewriter
         static string[] bgmOptions = { "Parent Map", "No Change", "Set To" };
         static string[] battleBGOptions = { "Parent Map", "Based on Terrain", "Set To" };
         static string[] enableOptions = { "Parent Map", "Enable", "Disable" };
+        static string[] mapTypeOptions = { "Root/Folder", "Map", "Area" };
         
         public MapTreeMap(FileStream f)
         {
@@ -311,7 +312,7 @@ namespace RPGRewriter
                 if (chunks.next(0x03))
                     mapIndent = M.readLengthMultibyte(f);
                 if (chunks.next(0x04))
-                    isMap = M.readLengthBool(f);
+                    mapType = M.readLengthBytes(f);
                 if (chunks.next(0x05))
                     xScroll = M.readLengthMultibyte(f);
                 if (chunks.next(0x06))
@@ -398,7 +399,8 @@ namespace RPGRewriter
             if (M.superVerboseStrings)
             {
                 mapTreeText.WriteLine("Open Status: " + openStatus);
-                mapTreeText.WriteLine("Is Map: " + isMap);
+                mapTreeText.WriteLine("Map Type: " + getMapTypeString(mapType) + " (" + mapType + ")");
+                mapTreeText.WriteLine("Is Map: " + (mapType == 1));
                 mapTreeText.WriteLine("Has Children: " + hasChildren);
                 mapTreeText.WriteLine("Area Rect: " + areaRect[0] + ", " + areaRect[1] + ", " + areaRect[2] + ", " + areaRect[3]);
             }
@@ -419,6 +421,11 @@ namespace RPGRewriter
         {
             return id;
         }
+
+        string getMapTypeString(int type)
+        {
+            return type >= 0 && type < mapTypeOptions.Length? mapTypeOptions[type] : "Unknown";
+        }
         
         public void importStrings()
         {
@@ -436,7 +443,7 @@ namespace RPGRewriter
             if (chunks.wasNext(0x03))
                 M.writeLengthMultibyte(mapIndent);
             if (chunks.wasNext(0x04))
-                M.writeLengthBool(isMap);
+                M.writeLengthBytes(mapType);
             if (chunks.wasNext(0x05))
                 M.writeLengthMultibyte(xScroll);
             if (chunks.wasNext(0x06))
