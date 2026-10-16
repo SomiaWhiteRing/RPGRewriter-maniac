@@ -162,10 +162,11 @@ namespace RPGRewriter
                 if (chunks.next(0x51)) // Events chunk ID
                 {
                     int declaredEventChunkLength = M.readMultibyte(f); // 翻译软件可能改错这里
+                    long startOfEventChunk = f.Position;
                     int declaredEventCount = M.readMultibyte(f);      // 事件数量通常是准确的
                     long startOfEventData = f.Position;
                     // *** 使用声明长度计算理论结束位置，但要意识到它可能错误 ***
-                    long declaredEndOfChunk = startOfEventData + declaredEventChunkLength;
+                    long declaredEndOfChunk = startOfEventChunk + declaredEventChunkLength;
                     // *** 获取文件实际剩余长度作为硬性边界 ***
                     long actualEndOfFile = f.Length;
                     long safeEndOfChunk = Math.Min(declaredEndOfChunk, actualEndOfFile); // 不能读超过文件末尾
@@ -292,10 +293,10 @@ namespace RPGRewriter
                     }
                 } // End of if (chunks.next(0x51))
                 
-                // if (chunks.next(0x5a))
-                //     saveCount2003E = M.readLengthMultibyte(f);
-                // else if (chunks.next(0x5b))
-                //     saveCount = M.readLengthMultibyte(f);
+                if (chunks.next(0x5a))
+                    saveCount2003E = M.readLengthMultibyte(f);
+                if (chunks.next(0x5b))
+                    saveCount = M.readLengthMultibyte(f);
                 
                 // M.byteCheck(f, 0x00);
                 
@@ -311,6 +312,12 @@ namespace RPGRewriter
                 return false;
             }
             
+            if (hadEventRecovery && M.globalMode == "Rewriting")
+            {
+                Console.WriteLine(filename + " had event parse recovery/warnings; refusing to rewrite incomplete data.");
+                return false;
+            }
+
             if (writeLog)
                 M.logSave();
             return true;

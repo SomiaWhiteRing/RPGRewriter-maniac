@@ -865,6 +865,8 @@ namespace RPGRewriter
             }
             catch (Exception ex)
             {
+                Environment.ExitCode = 1;
+                Console.Error.WriteLine(ex.Message);
                 try
                 {
                     string log = "Unhandled exception\n" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "\n" + ex.ToString();
@@ -927,6 +929,7 @@ namespace RPGRewriter
                         case "check": globalMode = "Checking"; break;
                         case "single": allFiles = false; break;
                         case "all": allFiles = true; break;
+                        case "forceresave": alwaysResaveFiles = true; break;
                     }
                     
                     if (commandLineFunction == "") // Only let function be set once
@@ -2053,7 +2056,9 @@ namespace RPGRewriter
         {
             changesMade = alwaysResaveFiles;
             
-            Map map = new Map(filepath, writeLog);
+            Map map = new Map();
+            if (!map.loadFile(filepath, writeLog))
+                throw new InvalidDataException("Failed to read map: " + filepath);
             
             if (globalMode == "Extracting")
                 return map.getString();
@@ -2075,8 +2080,8 @@ namespace RPGRewriter
                     else if (userSettings["NoteUnchanged"] == 1)
                         Console.WriteLine("No changes necessary for " + filename + ".");
                 }
-                if (changesMade)
-                    map.writeFile();
+                if (changesMade && !map.writeFile())
+                    throw new IOException("Failed to save map: " + filepath);
             }
             else if (checkUnusedData)
                 map.getString(); // Not to actually get string, but to let it call getDataX functions, which remove entries as they're referenced
@@ -2092,7 +2097,9 @@ namespace RPGRewriter
         {
             changesMade = alwaysResaveFiles;
             
-            MapTree mapTree = new MapTree(filepath, false);
+            MapTree mapTree = new MapTree();
+            if (!mapTree.loadFile(filepath, false))
+                throw new InvalidDataException("Failed to read map tree: " + filepath);
             
             if (!readingDataNames)
             {
@@ -2116,8 +2123,8 @@ namespace RPGRewriter
                         else if (userSettings["NoteUnchanged"] == 1)
                             Console.WriteLine("No changes necessary for " + filename + ".");
                     }
-                    if (changesMade)
-                        mapTree.writeFile();
+                    if (changesMade && !mapTree.writeFile())
+                        throw new IOException("Failed to save map tree: " + filepath);
                 }
                 else if (checkUnusedData)
                     mapTree.getString(); // Not to actually get string, but to let it call getDataX functions, which remove entries as they're referenced
@@ -2137,7 +2144,9 @@ namespace RPGRewriter
         {
             changesMade = alwaysResaveFiles;
             
-            Database db = new Database(filepath, false);
+            Database db = new Database();
+            if (!db.loadFile(filepath, false))
+                throw new InvalidDataException("Failed to read database: " + filepath);
             
             if (!readingDataNames)
             {
@@ -2161,8 +2170,8 @@ namespace RPGRewriter
                         else if (userSettings["NoteUnchanged"] == 1)
                             Console.WriteLine("No changes necessary for " + filename + ".");
                     }
-                    if (changesMade)
-                        db.writeFile();
+                    if (changesMade && !db.writeFile())
+                        throw new IOException("Failed to save database: " + filepath);
                 }
                 else if (checkUnusedData)
                     db.getString(); // Not to actually get string, but to let it call getDataX functions, which remove entries as they're referenced
@@ -5846,7 +5855,7 @@ namespace RPGRewriter
         // Limits length of string, considering two-byte characters in "to translate" write encoding to be two "units."
         public static string limitLength(string str, int length)
         {
-            if (ignoreLengthLimits >= 1)
+            if (ignoreLengthLimits >= 1 || writeEncodingIDs[S_TOTRANSLATE] == 65001)
                 return str;
             
             string origStr = str;
@@ -5882,6 +5891,9 @@ namespace RPGRewriter
         // Wraps overflowing lines in a message according to word wrap settings.
         public static string wordWrap(string str)
         {
+            if (writeEncodingIDs[S_TOTRANSLATE] == 65001)
+                return str;
+
             // --- 新增：定义可换行的标点符号集合 ---
             // 包括常见的中文全角标点和半角空格
             var lineBreakChars = new HashSet<char> {

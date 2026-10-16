@@ -69,7 +69,7 @@ namespace RPGRewriter
             
             try
             {
-                chunks = new Chunks(f, myClass);
+                chunks = new Chunks(f, myClass, allowEndOfFile: true);
                 
                 M.stringCheck(f, "LcfDataBase");
                 

@@ -11,11 +11,13 @@ namespace RPGRewriter
         List<byte> chunkList;
         List<byte> chunkCheckList;
         int lastReadChunk = 0;
+        bool allowEndOfFile;
         
-        public Chunks(FileStream f, string className)
+        public Chunks(FileStream f, string className, bool allowEndOfFile = false)
         {
             this.f = f;
             this.className = className;
+            this.allowEndOfFile = allowEndOfFile;
         }
         
         // 无参数构造函数，用于创建空的Chunks对象
@@ -58,6 +60,10 @@ namespace RPGRewriter
         // Checks the next byte. If it matches, it returns true. Otherwise, it acts as if it were never read. Adds the byte to usedList if used.
         public bool next(byte b)
         {
+            // LDB root sections may end at EOF; chunk payloads still require complete reads.
+            if (allowEndOfFile && f.Position == f.Length)
+                return false;
+
             if (M.confirmChunkParity)
             {
                 for (byte i = (byte)(lastReadChunk + 1); i < b; i++)
