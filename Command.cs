@@ -1677,11 +1677,7 @@ namespace RPGRewriter
         
         string command10130ChangeFace() // cf 12
         {
-            if (!HasEnoughArgs(3))
-            {
-                return "command10130ChangeFace: [Error: Invalid arguments]";
-            }
-            
+            // Some maps omit trailing zero parameters, including all parameters when clearing the face.
             int index = SafeGetArg(0);
             bool rightSide = (SafeGetArg(1) == 1);
             bool flip = (SafeGetArg(2) == 1);
