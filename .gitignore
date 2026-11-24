@@ -1,2 +1,6 @@
 /obj
 /bin
+/analysis/
+/dist/
+/patch_selfvar_250921/
+/tools/

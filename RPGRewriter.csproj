@@ -38,6 +38,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Chunks.cs" />
+    <Compile Include="MessageWidths.cs" />
     <Compile Include="Command.cs" />
     <Compile Include="Database.cs" />
     <Compile Include="Database\Animations.cs" />

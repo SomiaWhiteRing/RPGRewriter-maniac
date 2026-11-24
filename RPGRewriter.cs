@@ -184,6 +184,8 @@ namespace RPGRewriter
         // Variables tracking command context.
         public static bool messagePreceded = false;
         public static bool messageFaceOn = false;
+        static string widthTablePath;
+        static MessageWidths messageWidths;
         public static bool lastWroteAMessage = false;
         public static bool wroteStringInPage = false;
         public static string fullMessageHeader = "";
@@ -297,6 +299,8 @@ namespace RPGRewriter
             
             loadUserSettings(true);
             parseCommandLineArgs(args);
+            if (widthTablePath != null)
+                messageWidths = new MessageWidths(widthTablePath, writeEncodingIDs[S_TOTRANSLATE]);
             
             loadTransList();
             
@@ -930,6 +934,11 @@ namespace RPGRewriter
                         case "single": allFiles = false; break;
                         case "all": allFiles = true; break;
                         case "forceresave": alwaysResaveFiles = true; break;
+                        case "widthtable":
+                            if (++i >= args.Length)
+                                throw new ArgumentException("Missing filename for -widthtable.");
+                            widthTablePath = args[i];
+                            break;
                     }
                     
                     if (commandLineFunction == "") // Only let function be set once
@@ -5891,6 +5900,9 @@ namespace RPGRewriter
         // Wraps overflowing lines in a message according to word wrap settings.
         public static string wordWrap(string str)
         {
+            if (messageWidths != null)
+                return messageWidths.Wrap(str, messageFaceOn ? 232 : 304);
+
             if (writeEncodingIDs[S_TOTRANSLATE] == 65001)
                 return str;
 
