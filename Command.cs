@@ -1003,7 +1003,7 @@ namespace RPGRewriter
                     commandName = "StringPicture";
                 else if (isManiacsCallCommand())
                     commandName = "ManiacsCallCommand";
-                else if (isManiacsStringVariable())
+                else if (isTranslatableManiacsStringVariable())
                     commandName = "ManiacsStringVariable";
                 else if (isManiacsScriptLine())
                     commandName = "ManiacsScript";
@@ -1079,7 +1079,7 @@ namespace RPGRewriter
                     
                     return header + exportStringArg + lb + terminator;
                 }
-                else if (isManiacsCallCommand() || isManiacsStringVariable() || isManiacsScriptLine())
+                else if (isManiacsCallCommand() || isTranslatableManiacsStringVariable() || isManiacsScriptLine())
                 {
                     M.wroteStringInPage = true;
                     
@@ -4168,9 +4168,11 @@ namespace RPGRewriter
             return opcode == C_MANIACS3019;
         }
         
-        public bool isManiacsStringVariable()
+        public bool isTranslatableManiacsStringVariable()
         {
-            return opcode == C_MANIACS3020;
+            // File reads use the string as a filename for both assignment and append.
+            int operation = SafeGetArg(3) & 0xFFFF;
+            return opcode == C_MANIACS3020 && operation != 0x0C00 && operation != 0x0C01;
         }
         
         public bool isManiacsScriptLine()

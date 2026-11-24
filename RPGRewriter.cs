@@ -5630,7 +5630,7 @@ namespace RPGRewriter
                 
                 if (command.isMessageStart() || command.isChoice()
                  || command.isNameChange() || command.isTitleChange() || command.isNameFork() || command.isStringPicture()
-                 || command.isManiacsCallCommand() || command.isManiacsStringVariable() || command.isManiacsScriptLine())
+                 || command.isManiacsCallCommand() || command.isTranslatableManiacsStringVariable() || command.isManiacsScriptLine())
                 {
                     if (importingStringArgs.ContainsKey(currentEventNum))
                     {
@@ -5645,7 +5645,7 @@ namespace RPGRewriter
                                                 : command.isNameFork()? "NameFork"
                                                 : command.isStringPicture()? "StringPicture"
                                                 : command.isManiacsCallCommand()? "ManiacsCallCommand"
-                                                : command.isManiacsStringVariable()? "ManiacsStringVariable"
+                                                : command.isTranslatableManiacsStringVariable()? "ManiacsStringVariable"
                                                 : command.isManiacsScriptLine()? "ManiacsScript"
                                                 : "";
                             
@@ -5757,7 +5757,7 @@ namespace RPGRewriter
                                     }
                                     else if (command.isNameChange() || command.isTitleChange()
                                           || command.isNameFork() || command.isStringPicture()
-                                          || command.isManiacsCallCommand() || command.isManiacsStringVariable() || command.isManiacsScriptLine()) // Just replace string, easy
+                                          || command.isManiacsCallCommand() || command.isTranslatableManiacsStringVariable() || command.isManiacsScriptLine()) // Just replace string, easy
                                     {
                                         if (command.setStringArg(importArg))
                                             changesMade = true;
