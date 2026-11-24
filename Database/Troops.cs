@@ -381,7 +381,7 @@ namespace RPGRewriter
         
         public void importStrings()
         {
-            M.importPageCommands(ref commands, id);
+            M.importPageCommands(ref commands, id, "Troop");
         }
         
         override protected void myWrite()

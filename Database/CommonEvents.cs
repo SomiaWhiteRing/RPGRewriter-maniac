@@ -212,7 +212,7 @@ namespace RPGRewriter
                 if (commonName != "")
                     chunks.add(0x01);
                 
-                M.importPageCommands(ref commands, 0);
+                M.importPageCommands(ref commands, 0, "Common");
                 M.checkIfImportingStringsExhausted(id);
                 M.checkIfCommandValuesExhausted(id);
             }

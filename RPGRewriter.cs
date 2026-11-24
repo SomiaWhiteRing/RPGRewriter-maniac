@@ -5612,7 +5612,7 @@ namespace RPGRewriter
         }
         
         // A generic import method for command lists, for use by Page, TroopPage, and CommonEvent.
-        public static void importPageCommands(ref List<Command> commands, int pageNum)
+        public static void importPageCommands(ref List<Command> commands, int pageNum, string fontSource = null)
         {
             currentPage = "Page " + pageNum;
             currentPageNum = pageNum;
@@ -5621,6 +5621,10 @@ namespace RPGRewriter
             if (importingStringArgs == null)
                 return;
             
+            string slots = messageWidths == null ? "" : messageWidths.PageSlots(
+                fontSource ?? Path.GetFileNameWithoutExtension(currentFile), currentEventNum, pageNum);
+            char inheritedSlot = messageWidths == null ? '?' : messageWidths.InheritedSlot;
+            int messageIndex = 0;
             Dictionary<int, List<string>> caseNames = new Dictionary<int, List<string>>();
             
             for (int i = 0; i < commands.Count; i++)
@@ -5660,7 +5664,9 @@ namespace RPGRewriter
                                     
                                     if (command.isMessageStart()) // Must add/remove lines as necessary
                                     {
-                                        importArg = wordWrap(importArg);
+                                        char slot = messageIndex < slots.Length ? slots[messageIndex] : inheritedSlot;
+                                        ++messageIndex;
+                                        importArg = wordWrap(importArg, slot);
                                         
                                         string[] lines = importArg.Split('\n');
                                         
@@ -5898,10 +5904,10 @@ namespace RPGRewriter
         }
         
         // Wraps overflowing lines in a message according to word wrap settings.
-        public static string wordWrap(string str)
+        public static string wordWrap(string str, char slot = '?')
         {
             if (messageWidths != null)
-                return messageWidths.Wrap(str, messageFaceOn ? 232 : 304);
+                return messageWidths.Wrap(str, messageFaceOn ? 232 : 304, slot);
 
             if (writeEncodingIDs[S_TOTRANSLATE] == 65001)
                 return str;
